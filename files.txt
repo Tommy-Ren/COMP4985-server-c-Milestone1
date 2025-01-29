@@ -1,0 +1,1 @@
+app src/main.c src/server.c include/server.h src/client.c include/client.h src/stringTools.c include/stringTools.h src/httpRequest.c include/httpRequest.h src/sigintHandler.c include/sigintHandler.h src/fileTools.c include/fileTools.h
