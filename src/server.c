@@ -1,531 +1,464 @@
+/*
+ * This code is licensed under the Attribution-NonCommercial-NoDerivatives 4.0 International license.
+ *
+ * Author: D'Arcy Smith (ds@programming101.dev)
+ *
+ * You are free to:
+ *   - Share: Copy and redistribute the material in any medium or format.
+ *   - Under the following terms:
+ *       - Attribution: You must give appropriate credit, provide a link to the license, and indicate if changes were made.
+ *       - NonCommercial: You may not use the material for commercial purposes.
+ *       - NoDerivatives: If you remix, transform, or build upon the material, you may not distribute the modified material.
+ *
+ * For more details, please refer to the full license text at:
+ * https://creativecommons.org/licenses/by-nc-nd/4.0/
+ */
 
-//
-// Created by Kiet & Tommy on 12/1/25.
-//
-
-#include "../include/server.h"
-#include "../include/fileTools.h"
-#include "../include/httpRequest.h"
-#include "../include/stringTools.h"
 #include <arpa/inet.h>
-#include <fcntl.h>
-#include <ndbm.h>
+#include <errno.h>
+#include <inttypes.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
-#define MAX_BUFFER_SIZE 1024
-// #define STATUS_INTERNAL_SERVER_ERR 500
-// #define STATUS_OK 200
-// #define STATUS_RES_CREATED 201
-// todo handle the different cases in the response :: 404, 504, etc
-// todo re-comment code for more clarity
-// todo break down functions into smaller functions to pinpoint errors, etc
-// todo move functions to appropriate modules
-// todo implement read fully --> wait until all bits are read (wait until end of
-// req \r\n\r\n for reading)
-
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
-static volatile sig_atomic_t exit_flag = 0;
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
-static struct pollfd fds[SOMAXCONN];
-
-void server(void)
+struct MessageHeader
 {
-    printf("SERVER\n");
+    uint8_t  packetType;
+    uint8_t  version;
+    uint16_t senderId;
+    uint16_t payloadLength;
+};
+
+static void           setup_signal_handler(void);
+static void           sigint_handler(int signum);
+static void           parse_arguments(int argc, char *argv[], char **ip_address, char **port);
+static int            parse_ber_message(int client_sockfd, struct MessageHeader *msg_header, uint8_t *payload);
+static void           handle_arguments(const char *binary_name, const char *ip_address, const char *port_str, in_port_t *port);
+static in_port_t      parse_in_port_t(const char *binary_name, const char *port_str);
+_Noreturn static void usage(const char *program_name, int exit_code, const char *message);
+static void           convert_address(const char *address, struct sockaddr_storage *addr);
+static int            socket_create(int domain, int type, int protocol);
+static void           socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t port);
+static void           start_listening(int server_fd, int backlog);
+static int            socket_accept_connection(int server_fd, struct sockaddr_storage *client_addr, socklen_t *client_addr_len);
+static void           handle_connection(int client_sockfd, struct sockaddr_storage *client_addr);
+static void           shutdown_socket(int sockfd, int how);
+static void           socket_close(int sockfd);
+
+#define UNKNOWN_OPTION_MESSAGE_LEN 24
+#define BASE_TEN 10
+#define BER_MAX_PAYLOAD_SIZE 1024
+static volatile sig_atomic_t exit_flag = 0;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+
+int main(int argc, char *argv[])
+{
+    char                   *address;
+    char                   *port_str;
+    in_port_t               port;
+    int                     sockfd;
+    struct sockaddr_storage addr;
+
+    address  = NULL;
+    port_str = NULL;
+    parse_arguments(argc, argv, &address, &port_str);
+    handle_arguments(argv[0], address, port_str, &port);
+    convert_address(address, &addr);
+    sockfd = socket_create(addr.ss_family, SOCK_STREAM, 0);
+    socket_bind(sockfd, &addr, port);
+    start_listening(sockfd, SOMAXCONN);
+    setup_signal_handler();
+
+    while(!(exit_flag))
+    {
+        int                     client_sockfd;
+        struct sockaddr_storage client_addr;
+        socklen_t               client_addr_len;
+
+        client_addr_len = sizeof(client_addr);
+        client_sockfd   = socket_accept_connection(sockfd, &client_addr, &client_addr_len);
+
+        if(client_sockfd == -1)
+        {
+            if(exit_flag)
+            {
+                break;
+            }
+
+            continue;
+        }
+
+        handle_connection(client_sockfd, &client_addr);
+        shutdown_socket(client_sockfd, SHUT_RD);
+        socket_close(client_sockfd);
+    }
+
+    shutdown_socket(sockfd, SHUT_RDWR);
+    socket_close(sockfd);
+
+    return EXIT_SUCCESS;
 }
 
-static int set_nonblocking(int sockfd)
+// BER Decoder function
+static int parse_ber_message(int client_sockfd, struct MessageHeader *msg_header, uint8_t *payload)
 {
-    int flags = fcntl(sockfd, F_GETFL, 0);
-    if(flags == -1)
+    ssize_t bytes_received;
+    uint8_t buffer[sizeof(struct MessageHeader) + BER_MAX_PAYLOAD_SIZE];
+
+    // Read the message from the client
+    bytes_received = recv(client_sockfd, buffer, sizeof(buffer), 0);
+    if(bytes_received < 0)
     {
-        perror("fcntl F_GETFL");
+        perror("Error reading from socket");
         return -1;
     }
-    if(fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) == -1)
+
+    // Assuming the message contains a header followed by the payload
+    if(sizeof(bytes_received) < sizeof(struct MessageHeader))
     {
-        perror("fcntl F_SETFL O_NONBLOCK");
+        fprintf(stderr, "Invalid message size\n");
         return -1;
     }
+
+    // Parse the message header
+    memcpy(msg_header, buffer, sizeof(struct MessageHeader));
+
+    // Parse the payload (if any)
+    if(msg_header->payloadLength > 0 && msg_header->payloadLength <= BER_MAX_PAYLOAD_SIZE)
+    {
+        memcpy(payload, buffer + sizeof(struct MessageHeader), msg_header->payloadLength);
+    }
+    else
+    {
+        fprintf(stderr, "Invalid payload length\n");
+        return -1;
+    }
+
     return 0;
 }
 
-int server_setup(char *passedServerInfo[])
+static void parse_arguments(int argc, char *argv[], char **ip_address, char **port)
 {
-    struct serverInformation newServer;
-    struct clientInformation clients[SOMAXCONN];
-    int                      numClients;
-    // sigaction --> close
-    // server setup
-    newServer.ip   = passedServerInfo[0];
-    newServer.port = passedServerInfo[1];
-    // socket
-    newServer.fd = socket_create();
-    if(set_nonblocking(newServer.fd) == -1)
+    int opt;
+
+    opterr = 0;
+
+    while((opt = getopt(argc, argv, "h")) != -1)
     {
-        perror("set_nonblocking failed");
-        close(newServer.fd);
-        return 0;
+        switch(opt)
+        {
+            case 'h':
+            {
+                usage(argv[0], EXIT_SUCCESS, NULL);
+            }
+            case '?':
+            {
+                char message[UNKNOWN_OPTION_MESSAGE_LEN];
+
+                snprintf(message, sizeof(message), "Unknown option '-%c'.", optopt);
+                usage(argv[0], EXIT_FAILURE, message);
+            }
+            default:
+            {
+                usage(argv[0], EXIT_FAILURE, NULL);
+            }
+        }
     }
-    // bind
-    if(socket_bind(newServer))
+
+    if(optind >= argc)
     {
-        perror("SOCKET BIND");
-        return -1;
+        usage(argv[0], EXIT_FAILURE, "The ip address and port are required");
     }
 
-    start_listen(newServer.fd);
+    if(optind + 1 >= argc)
+    {
+        usage(argv[0], EXIT_FAILURE, "The port is required");
+    }
 
-    // Initialize the main server socket in the pollfd array
-    fds[0].fd     = newServer.fd;
-    fds[0].events = POLLIN;
-    numClients    = 1;    // Number of clients (starting with the server itself)
+    if(optind < argc - 2)
+    {
+        usage(argv[0], EXIT_FAILURE, "Error: Too many arguments.");
+    }
 
-    handle_connection(newServer.fd, clients, &numClients);
-
-    server_close(newServer);
-    return 0;
+    *ip_address = argv[optind];
+    *port       = argv[optind + 1];
 }
 
-// to set up server:
-
-int socket_create(void)
+static void handle_arguments(const char *binary_name, const char *ip_address, const char *port_str, in_port_t *port)
 {
-    int serverSocket;
-    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if(serverSocket == -1)
+    if(ip_address == NULL)
     {
-        perror("Socket create failed");
+        usage(binary_name, EXIT_FAILURE, "The ip address is required.");
+    }
+
+    if(port_str == NULL)
+    {
+        usage(binary_name, EXIT_FAILURE, "The port is required.");
+    }
+
+    *port = parse_in_port_t(binary_name, port_str);
+}
+
+in_port_t parse_in_port_t(const char *binary_name, const char *str)
+{
+    char     *endptr;
+    uintmax_t parsed_value;
+
+    errno        = 0;
+    parsed_value = strtoumax(str, &endptr, BASE_TEN);
+
+    if(errno != 0)
+    {
+        perror("Error parsing in_port_t");
         exit(EXIT_FAILURE);
     }
-    return serverSocket;
+
+    // Check if there are any non-numeric characters in the input string
+    if(*endptr != '\0')
+    {
+        usage(binary_name, EXIT_FAILURE, "Invalid characters in input.");
+    }
+
+    // Check if the parsed value is within the valid range for in_port_t
+    if(parsed_value > UINT16_MAX)
+    {
+        usage(binary_name, EXIT_FAILURE, "in_port_t value out of range.");
+    }
+
+    return (in_port_t)parsed_value;
 }
 
-int socket_bind(struct serverInformation activeServer)
+_Noreturn static void usage(const char *program_name, int exit_code, const char *message)
 {
-    struct sockaddr_in server_address;
-    int                port;
-    char              *endptr;
-    const int          decimalBase = 10;
-
-    memset(&server_address, 0, sizeof(server_address));
-    server_address.sin_family = AF_INET;
-
-    if(inet_pton(AF_INET, activeServer.ip, &server_address.sin_addr) <= 0)
+    if(message)
     {
-        perror("Invalid IP address");
-        return -1;
+        fprintf(stderr, "%s\n", message);
     }
 
-    port = (int)strtol(activeServer.port, &endptr, decimalBase);
+    fprintf(stderr, "Usage: %s [-h] <ip address> <port>\n", program_name);
+    fputs("Options:\n", stderr);
+    fputs("  -h  Display this help message\n", stderr);
+    exit(exit_code);
+}
 
-    if(*endptr != '\0' && *endptr != '\n')
+static void setup_signal_handler(void)
+{
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof(sa));
+#if defined(__clang__)
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wdisabled-macro-expansion"
+#endif
+    sa.sa_handler = sigint_handler;
+#if defined(__clang__)
+    #pragma clang diagnostic pop
+#endif
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    if(sigaction(SIGINT, &sa, NULL) == -1)
     {
-        perror("Invalid port number");
-        return -1;
+        perror("sigaction");
+        exit(EXIT_FAILURE);
     }
+}
 
-    server_address.sin_port = htons((uint16_t)port);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
 
-    if(bind(activeServer.fd, (struct sockaddr *)&server_address, sizeof(server_address)) == -1)
+static void sigint_handler(int signum)
+{
+    exit_flag = 1;
+}
+
+#pragma GCC diagnostic pop
+
+static void convert_address(const char *address, struct sockaddr_storage *addr)
+{
+    memset(addr, 0, sizeof(*addr));
+
+    if(inet_pton(AF_INET, address, &(((struct sockaddr_in *)addr)->sin_addr)) == 1)
     {
-        perror("Bind failed");
+        addr->ss_family = AF_INET;
+    }
+    else if(inet_pton(AF_INET6, address, &(((struct sockaddr_in6 *)addr)->sin6_addr)) == 1)
+    {
+        addr->ss_family = AF_INET6;
+    }
+    else
+    {
+        fprintf(stderr, "%s is not an IPv4 or an IPv6 address\n", address);
+        exit(EXIT_FAILURE);
+    }
+}
+
+static int socket_create(int domain, int type, int protocol)
+{
+    int sockfd;
+
+    sockfd = socket(domain, type, protocol);
+
+    if(sockfd == -1)
+    {
+        perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
 
-    printf("Socket bound successfully to %s:%s.\n", activeServer.ip, activeServer.port);
-
-    return 0;
+    return sockfd;
 }
 
-void start_listen(int server_fd)
+static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t port)
 {
-    if(listen(server_fd, SOMAXCONN) == -1)
+    char      addr_str[INET6_ADDRSTRLEN];
+    socklen_t addr_len;
+    void     *vaddr;
+    in_port_t net_port;
+
+    net_port = htons(port);
+
+    if(addr->ss_family == AF_INET)
+    {
+        struct sockaddr_in *ipv4_addr;
+
+        ipv4_addr           = (struct sockaddr_in *)addr;
+        addr_len            = sizeof(*ipv4_addr);
+        ipv4_addr->sin_port = net_port;
+        vaddr               = (void *)&(((struct sockaddr_in *)addr)->sin_addr);
+    }
+    else if(addr->ss_family == AF_INET6)
+    {
+        struct sockaddr_in6 *ipv6_addr;
+
+        ipv6_addr            = (struct sockaddr_in6 *)addr;
+        addr_len             = sizeof(*ipv6_addr);
+        ipv6_addr->sin6_port = net_port;
+        vaddr                = (void *)&(((struct sockaddr_in6 *)addr)->sin6_addr);
+    }
+    else
+    {
+        fprintf(stderr, "Internal error: addr->ss_family must be AF_INET or AF_INET6, was: %d\n", addr->ss_family);
+        exit(EXIT_FAILURE);
+    }
+
+    if(inet_ntop(addr->ss_family, vaddr, addr_str, sizeof(addr_str)) == NULL)
+    {
+        perror("inet_ntop");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Binding to: %s:%u\n", addr_str, port);
+
+    if(bind(sockfd, (struct sockaddr *)addr, addr_len) == -1)
+    {
+        perror("Binding failed");
+        fprintf(stderr, "Error code: %d\n", errno);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Bound to socket: %s:%u\n", addr_str, port);
+}
+
+static void start_listening(int server_fd, int backlog)
+{
+    if(listen(server_fd, backlog) == -1)
     {
         perror("listen failed");
         close(server_fd);
         exit(EXIT_FAILURE);
     }
+
     printf("Listening for incoming connections...\n");
 }
 
-/**
- * Function handles main logic loop for ready client sockets using IO
- * multiplexing
- * @param server_fd server socket
- * @param clients array of client socket fds
- * @param numClients number of clients
- * @return 1 on success
- */
-int handle_connection(int server_fd, struct clientInformation clients[], int *numClients)
+static int socket_accept_connection(int server_fd, struct sockaddr_storage *client_addr, socklen_t *client_addr_len)
 {
-    TokenAndStr        requestFirstLine;
-    const HTTPRequest *httpRequest;
+    int  client_fd;
+    char client_host[NI_MAXHOST];
+    char client_service[NI_MAXSERV];
 
-    // To silence the errors :/
-    httpRequest = NULL;
-    printHTTPRequestStruct(httpRequest);
+    errno     = 0;
+    client_fd = accept(server_fd, (struct sockaddr *)client_addr, client_addr_len);
 
-    while(!exit_flag)
+    if(client_fd == -1)
     {
-        int activity;
-        for(int i = 1; i < *numClients; i++)
+        if(errno != EINTR)
         {
-            fds[i].fd     = clients[i].fd;
-            fds[i].events = POLLIN;
+            perror("accept failed");
         }
 
-        // poll used for IO multiplexing
-        activity = poll(fds, (nfds_t)*numClients, -1);    // -1 means wait indefinitely
-
-        if(activity == -1)
-        {
-            perror("poll failed");
-            exit(EXIT_FAILURE);
-        }
-
-        // check for new connection on the main server socket
-        if(fds[0].revents & POLLIN)
-        {
-            int client_fd = accept(server_fd, NULL, NULL);
-            if(client_fd == -1)
-            {
-                perror("accept failed");
-                // Handle error if needed
-            }
-            else
-            {
-                // Set client socket to non-blocking mode
-                if(set_nonblocking(client_fd) == -1)
-                {
-                    perror("set_nonblocking failed");
-                    // Handle error if needed
-                    close(client_fd);
-                }
-                else
-                {
-                    printf("New client: adding to array\n");
-                    clients[*numClients].fd = client_fd;
-                    // TODO add to client struct here when ready using
-                    // clients[*numClients]
-                    (*numClients)++;
-
-                    fds[*numClients - 1].fd = client_fd;
-
-                    // waits for next input from any client
-                    fds[*numClients - 1].events = POLLIN;
-                }
-            }
-        }
-
-        // check if any client is ready to send a response to
-        for(int i = 1; i < *numClients; ++i)
-        {
-            if(fds[i].revents & POLLIN)
-            {
-                char    buffer[MAX_BUFFER_SIZE];
-                ssize_t bytesRead;
-                printf("Client ready; working..\n");
-                // read in req
-                bytesRead = recv(clients[i].fd, buffer, sizeof(buffer), 0);
-                if(bytesRead == 0)
-                {
-                    printf("Client disconnected: %d\n", clients[i].fd);
-                    close(clients[i].fd);
-                    for(int j = i; j < *numClients - 1; ++j)
-                    {
-                        clients[j] = clients[j + 1];
-                        fds[j]     = fds[j + 1];
-                    }
-                    (*numClients)--;
-                }
-                else if(bytesRead < 0)
-                {
-                    perror("recv failed");
-                }
-                else
-                {
-                    // todo implement read fully (wait until \r\n\r\n)
-                    printf("\n\n"
-                           "----- START CLIENT REQUEST ----- "
-                           "\n\n"
-                           "%s\n"
-                           "----- END CLIENT REQUEST ----- \n"
-                           "\n\n",
-                           buffer);
-
-                    // Get only the first line.
-                    requestFirstLine = getFirstToken(buffer, "\n");
-
-                    printf("Request first line: %s\n", requestFirstLine.token);
-
-                    httpRequest = initializeHTTPRequestFromString(requestFirstLine.token);
-                    printHTTPRequestStruct(httpRequest);
-
-                    // handle request
-                    if(strcmp(httpRequest->method, "GET") == 0)
-                    {
-                        get_req_response(clients[i].fd, httpRequest->path);
-                    }
-                    else if(strcmp(httpRequest->method, "HEAD") == 0)
-                    {
-                        head_req_response(clients[i].fd, httpRequest->path);
-                    }
-                    else
-                    {
-                        // default err handling
-                        perror("Unknown method type");
-                        exit(EXIT_FAILURE);
-                    }
-                }
-            }
-        }
+        return -1;
     }
-    return 1;
-}
 
-/**
- * Function to close the given server socket
- * @param activeServer server socket fd
- * @return 0 if success
- */
-int server_close(struct serverInformation activeServer)
-{
-    if(close(activeServer.fd) == -1)
+    if(getnameinfo((struct sockaddr *)client_addr, *client_addr_len, client_host, NI_MAXHOST, client_service, NI_MAXSERV, 0) == 0)
     {
-        perror("close failed");
-        exit(EXIT_FAILURE);
-    }
-    printf("Closing the server.\n");
-    return 0;
-}
-
-/**
- * Function to close a client socket
- * @param activeClient client socket fd
- * @return 0 if success
- */
-int client_close(int activeClient)
-{
-    if(close(activeClient) == -1)
-    {
-        perror("close failed");
-        exit(EXIT_FAILURE);
-    }
-    printf("Closing the client.\n");
-    return 0;
-}
-
-/**
- * Function to check if a filePath is the root. If it is the root, then it will
- * change the verified_path to a default value
- * @param filePath path of the resource
- * @param verified_path the file path of either ./html/index.html or a valid
- * request
- * @return 0 if default, 1 if request
- */
-// todo move to server.h, remove static
-static int checkIfRoot(const char *filePath, char *verified_path)
-{
-    if(strcmp(filePath, "../data/") == 0)
-    {
-        printf("Requesting default file path...");
-        strcpy(verified_path, "index.html");
+        printf("Accepted a new connection from %s:%s\n", client_host, client_service);
     }
     else
     {
-        strcpy(verified_path, filePath);
-        return 1;
+        printf("Unable to get client information\n");
     }
-    return 0;
+
+    return client_fd;
 }
 
-/**
- * Function to construct the response and send to client socket from a given
- * resource Only called when a resource is confirmed to exist
- * @param client_socket client to send the response to
- * @param content content of the resource requested
- * @return 0 if success
- */
-// todo add status codes and handle each situation based on that
-int send_response_resource(int client_socket, const char *content, size_t content_length)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+
+// Modify the handle_connection function to process incoming BER messages
+static void handle_connection(int client_sockfd, struct sockaddr_storage *client_addr)
 {
-    char   response[MAX_BUFFER_SIZE];
-    size_t total_sent = 0;
-    snprintf(response, MAX_BUFFER_SIZE, "HTTP/1.1 200 OK\r\nContent-Length: %zu\r\n\r\n", content_length);
+    struct MessageHeader msg_header;
+    uint8_t              payload[BER_MAX_PAYLOAD_SIZE];    // Assuming payload doesn't exceed 1024 bytes
 
-    // send the response header
-    if(send(client_socket, response, strlen(response), 0) == -1)
+    // Parse the BER message
+    if(parse_ber_message(client_sockfd, &msg_header, payload) == 0)
     {
-        perror("Error sending response header");
-        return -1;
-    }
+        // Successfully parsed the BER message, print the information
+        printf("Received BER message:\n");
+        printf("Packet Type: %u\n", msg_header.packetType);
+        printf("Version: %u\n", msg_header.version);
+        printf("Sender ID: %u\n", msg_header.senderId);
+        printf("Payload Length: %u\n", msg_header.payloadLength);
 
-    // send content
-    while(total_sent < content_length)
-    {
-        ssize_t sent = send(client_socket, content + total_sent, content_length - total_sent, 0);
-        if(sent == -1)
+        // Print the payload if it exists
+        if(msg_header.payloadLength > 0)
         {
-            perror("Error sending content");
-            return -1;
+            printf("Payload: ");
+            for(uint16_t i = 0; i < msg_header.payloadLength; i++)
+            {
+                printf("%02x ", payload[i]);
+            }
+            printf("\n");
         }
-        total_sent += (size_t)sent;
     }
-    return 0;
+    else
+    {
+        fprintf(stderr, "Failed to parse BER message\n");
+    }
 }
 
-/**
- * Function to construct and send the head request response
- * @param client_socket the client that will get the response
- * @param content_length the length of the content in the requested resource
- * @return 0 if success
- */ // todo <-- additional status codes
-int send_response_head(int client_socket, size_t content_length)
+#pragma GCC diagnostic pop
+
+static void shutdown_socket(int sockfd, int how)
 {
-    char response[MAX_BUFFER_SIZE];
-    snprintf(response, MAX_BUFFER_SIZE, "HTTP/1.1 200 OK\r\nContent-Length: %zu\r\n\r\n", content_length);
-
-    // Send the response header
-    if(send(client_socket, response, strlen(response), 0) == -1)
+    if(shutdown(sockfd, how) == -1)
     {
-        perror("Error sending response header");
-        return -1;
+        perror("Error closing socket");
+        exit(EXIT_FAILURE);
     }
-
-    return 0;
 }
 
-/**
- * Function to read the resource, save the resource into a malloc, send the
- * resource back to the client
- * @param client_socket client socket that sends the req
- * @return 0 if success
- */
-// todo break down into smaller functions
-int get_req_response(int client_socket, const char *filePath)
+static void socket_close(int sockfd)
 {
-    char  *filePathWithDot;
-    FILE  *resource_file;
-    long   totalBytesRead;
-    char  *file_content;
-    char   verified_path[MAX_BUFFER_SIZE];
-    size_t bytesRead;
-
-    // todo shift all get/head functions into a single function to port to both
-    // check if filePath is root
-    checkIfRoot(filePath, verified_path);
-
-    // append "./" to filePathWithDot
-    filePathWithDot = addCharacterToStart(verified_path, "../data");
-    if(filePathWithDot == NULL)
+    if(close(sockfd) == -1)
     {
-        perror(". character not added");
-        return -1;
+        perror("Error closing socket");
+        exit(EXIT_FAILURE);
     }
-
-    // open file
-    resource_file = fopen(filePathWithDot, "rbe");
-    if(resource_file == NULL)
-    {
-        fprintf(stderr, "Error opening resource file: %s\n", filePathWithDot);
-        free(filePathWithDot);
-        return -1;
-    }
-    free(filePathWithDot);
-
-    // move cursor to the end of the file, read the position in bytes, reset
-    // cursor
-    fseek(resource_file, 0, SEEK_END);
-    totalBytesRead = ftell(resource_file);
-    fseek(resource_file, 0, SEEK_SET);
-
-    // allocate memory
-    file_content = (char *)malloc((unsigned long)(totalBytesRead + 1));
-    if(file_content == NULL)
-    {
-        perror("Error allocating memory");
-        fclose(resource_file);
-        return -1;
-    }
-
-    // read into buffer
-    bytesRead = fread(file_content, 1, (unsigned long)totalBytesRead, resource_file);
-    if((long)bytesRead != totalBytesRead)
-    {
-        perror("Error reading HTML file");
-        free(file_content);
-        fclose(resource_file);
-        return -1;
-    }
-    fclose(resource_file);
-
-    // create response and send
-    if(send_response_resource(client_socket, file_content, bytesRead) == -1)
-    {
-        free(file_content);
-        return -1;
-    }
-
-    // free resources on success
-    free(file_content);
-    return 0;
-}
-
-/**
- * Function to handle a HEAD request and send back the header
- * @return 0 if success
- */
-int head_req_response(int client_socket, const char *filePath)
-{
-    /*
-     * Steps:
-     * Check if root
-     * filePathWithDot
-     * open file (check if exists)
-     * close file
-     * send response based on this
-     */
-    char *filePathWithDot;
-    FILE *resource_file;
-    char  verified_path[MAX_BUFFER_SIZE];
-    long  totalBytesRead;
-
-    // check if filePath is root
-    checkIfRoot(filePath, verified_path);
-
-    // append "." to filePathWithDot
-    filePathWithDot = addCharacterToStart(verified_path, "../data");
-    if(filePathWithDot == NULL)
-    {
-        perror(". character not added");
-        return -1;
-    }
-
-    // open file
-    resource_file = fopen(filePathWithDot, "rbe");
-    free(filePathWithDot);
-    if(resource_file == NULL)
-    {
-        perror("Error opening resource file");
-        return -1;
-    }
-
-    fseek(resource_file, 0, SEEK_END);
-    totalBytesRead = ftell(resource_file);
-    fseek(resource_file, 0, SEEK_SET);
-
-    // send header
-    send_response_head(client_socket, (size_t)totalBytesRead);
-
-    // close file
-    fclose(resource_file);
-
-    return 0;
 }

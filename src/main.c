@@ -1,7 +1,5 @@
-#include "../include/client.h"
+
 #include "../include/server.h"
-#include "../include/sigintHandler.h"
-#include "../include/stringTools.h"
 #include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,7 +27,7 @@ int main(int argc, char *argv[])
     // Set Ctrl-C override.
     signal(SIGINT, sigintHandler);
 
-    // handle args --> set up server on ip:port 
+    // handle args --> set up server on ip:port
     handle_args(parse_args(argc, argv));
 
     return EXIT_SUCCESS;
