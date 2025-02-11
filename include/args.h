@@ -7,7 +7,7 @@
 typedef struct Arguments
 {
     const char *ip;
-    in_port_t  *port;
+    in_port_t   port;
 } Arguments;
 
 // prints usage message and exits
@@ -17,6 +17,6 @@ _Noreturn void usage(const char *app_name, int exit_code, const char *message);
 void parse_args(Arguments *args, int argc, char *argv[]);
 
 // starts server or connects client to server
-int check_args(const char *binary_name, const Arguments *args);
+void check_args(const char *program, const Arguments *args);
 
 #endif

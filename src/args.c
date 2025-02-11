@@ -48,7 +48,7 @@ void parse_args(Arguments *args, int argc, char *argv[])
                     usage(argv[0], EXIT_FAILURE, "Port must be between 1 and 65535");
                 }
                 break;
-                case 'h':
+            case 'h':
                 usage(argv[0], EXIT_SUCCESS, NULL);
             case '?':
                 if(optopt != 'a' && optopt != 'p')
@@ -65,14 +65,14 @@ void parse_args(Arguments *args, int argc, char *argv[])
     }
 }
 
-int check_args(const char *binary_name, const Arguments *args)
+void check_args(const char *program, const Arguments *args)
 {
-    if (args->ip == NULL)
+    if(args->ip == NULL)
     {
-        usage(binary_name, EXIT_FAILURE, "Missing ipv4 address.");
+        usage(program, EXIT_FAILURE, "Missing ipv4 address.");
     }
-    if (args->port == NULL)
+    if(args->port == 0)
     {
-        usage(binary_name, EXIT_FAILURE, "Missing port number.");
+        usage(program, EXIT_FAILURE, "Missing port number.");
     }
 }

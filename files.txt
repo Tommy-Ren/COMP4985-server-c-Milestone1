@@ -1,2 +1,1 @@
-server src/server.c
-client src/client.c
+main src/main.c src/network.c include/network.h src/args.c include/args.h src/asn.c include/asn.h

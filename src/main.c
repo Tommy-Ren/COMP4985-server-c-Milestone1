@@ -1,6 +1,6 @@
 #include "../include/args.h"
 #include "../include/asn.h"
-#include "../include/server.h"
+#include "../include/network.h"
 #include <errno.h>
 #include <memory.h>
 #include <netinet/in.h>
@@ -11,38 +11,35 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#if defined(__linux__) && defined(__clang__)
+_Pragma("clang diagnostic ignored \"-Wdisabled-macro-expansion\"")
+#endif
+
 #define IP_ADDRESS "0.0.0.0"
 #define PORT "8000"
+#define SIG_BUF 50
 
-typedef struct data_t
-{
-    int                fd;
-    int                cfd; /* client fd */
-    struct sockaddr_in addr;
-    socklen_t          addr_len;
-} data_t;
+    static volatile sig_atomic_t server_running;
 
-static volatile sig_atomic_t server_running;
-
-static void sigint_handler(int signum);
 static void handle_signal(int sig);
-static void process_req(const data_t *d);
+static void process_req(int cfd);
 static void send_sys_success(uint8_t buf[], int fd, uint8_t packet_type);
 static void send_sys_error(uint8_t buf[], int fd, int err);
 static void send_acc_login_success(uint8_t buf[], int fd, uint16_t user_id);
 
-static void sigint_handler(int signum)
-{
-    server_running = 0;
-}
-
 static void handle_signal(int sig)
 {
+    char message[SIG_BUF];
+
+    snprintf(message, sizeof(message), "Caught signal: %d (%s)\n", sig, strsignal(sig));
+    write(STDOUT_FILENO, message, strlen(message));
+
     if(sig == SIGINT)
     {
         server_running = 0;
-        printf("\nShutting down server...");
+        snprintf(message, sizeof(message), "%s\n", "Server is shutting down...");
     }
+    write(STDOUT_FILENO, message, strlen(message));
 }
 
 int main(int argc, char *argv[])
@@ -66,14 +63,14 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    printf("Server is server_running... (press Ctrl+C to interrupt)\n");
+    printf("Server is running... (press Ctrl+C to interrupt)\n");
 
     memset(&args, 0, sizeof(Arguments));
     args.ip   = IP_ADDRESS;
     args.port = convert_port(PORT, &err);
 
     parse_args(&args, argc, argv);
-    check_arguemnts(args);
+    check_args(argv[0], &args);
     printf("Listening on %s: %d\n", args.ip, args.port);
     retval = EXIT_SUCCESS;
 
@@ -91,23 +88,23 @@ int main(int argc, char *argv[])
     server_running = 1;
     while(server_running)
     {
-        int                connfd;
-        struct sockaddr_in connaddr;
-        socklen_t          connsize;
+        int                cfd;      // Client file descriptor
+        struct sockaddr_in caddr;    // Client address
+        socklen_t          csize;    // Client size
 
         // !!BLOCKING!! Get client connection
-        connsize = sizeof(struct sockaddr_in);
-        memset(&connaddr, 0, connsize);
+        csize = sizeof(struct sockaddr_in);
+        memset(&caddr, 0, csize);
 
-        errno  = 0;
-        connfd = accept(sockfd, (struct sockaddr *)&connaddr, &connsize);
-        if(connfd < 0)
+        errno = 0;
+        cfd   = accept(sockfd, (struct sockaddr *)&caddr, &csize);
+        if(cfd < 0)
         {
-            // perror("main::accept");
+            perror("Failed to accept client connection");
             continue;
         }
 
-        printf("New connection from: %s:%d\n", inet_ntoa(connaddr.sin_addr), connaddr.sin_port);
+        printf("New connection from: %s:%d\n", inet_ntoa(caddr.sin_addr), caddr.sin_port);
 
         // Fork the process
         errno = 0;
@@ -115,18 +112,18 @@ int main(int argc, char *argv[])
         if(pid < 0)
         {
             perror("main::fork");
-            close(connfd);
+            close(cfd);
             continue;
         }
 
         if(pid == 0)
         {
-            retval = request_handler(connfd);
-            close(connfd);
+            process_req(cfd);
+            close(cfd);
             goto exit;
         }
 
-        close(connfd);
+        close(cfd);
     }
 
 exit:
@@ -134,32 +131,32 @@ exit:
     return retval;
 }
 
-static void process_req(const data_t *d)
+static void process_req(int cfd)
 {
+    int      err;
     header_t header = {0};
     uint8_t  buf[PACKETLEN];
-    int      result;
 
-    read(d->cfd, buf, HEADERLEN);
+    read(cfd, buf, HEADERLEN);
     decode_header(buf, &header);
 
-    read(d->cfd, buf + HEADERLEN, header.payload_len);
-    result = decode_packet(buf, &header);
+    read(cfd, buf + HEADERLEN, header.payload_len);
+    err = decode_packet(buf, &header);
 
     memset(buf, 0, PACKETLEN);
-    if(result < 0)
+    if(err < 0)
     {
-        send_sys_error(buf, d->cfd, result);
+        send_sys_error(buf, cfd, err);
     }
 
     if(header.packet_type == ACC_LOGIN)
     {
-        send_acc_login_success(buf, d->cfd, 1); /* 1 for testing only */
+        send_acc_login_success(buf, cfd, 1); /* 1 for testing only */
     }
 
     if(header.packet_type == ACC_LOGOUT || header.packet_type == ACC_CREATE || header.packet_type == ACC_EDIT)
     {
-        send_sys_success(buf, d->cfd, header.packet_type);
+        send_sys_success(buf, cfd, header.packet_type);
     }
 }
 

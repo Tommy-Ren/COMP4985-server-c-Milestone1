@@ -11,10 +11,11 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-
 static void setup_addr(struct sockaddr_storage *addr, socklen_t *addr_len, const Arguments *args, int *err);
-static int  create_socket(struct sockaddr_storage *addr, socklen_t addr_len, int *err);
+static int  create_socket(struct sockaddr_storage *addr, int *err);
 static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t port);
+
+#define BASE 10
 
 // Function to set up the network server
 int sever_network(const Arguments *args)
@@ -34,7 +35,7 @@ int sever_network(const Arguments *args)
     setup_addr(&addr, &addr_len, args, &err);
 
     // Create the socket
-    sockfd = create_socket(&addr, addr_len, err);
+    sockfd = create_socket(&addr, &err);
     if(sockfd < 0)
     {
         errno = err;
@@ -78,7 +79,7 @@ exit:
 }
 
 // Function to open network socket
-static int create_socket(struct sockaddr_storage *addr, socklen_t addr_len, int *err)
+static int create_socket(struct sockaddr_storage *addr, int *err)
 {
     int sockfd;
 
@@ -173,7 +174,7 @@ static void setup_addr(struct sockaddr_storage *addr, socklen_t *addr_len, const
 }
 
 // Function to convert port if network socket as type
-in_port_t convertPort(const char *str, int *err)
+in_port_t convert_port(const char *str, int *err)
 {
     in_port_t port;
     char     *endptr;
@@ -182,7 +183,7 @@ in_port_t convertPort(const char *str, int *err)
     *err  = ERR_NONE;
     port  = 0;
     errno = 0;
-    val   = strtol(str, &endptr, 10);
+    val   = strtol(str, &endptr, BASE);
 
     // Check if no digits were found
     if(endptr == str)
