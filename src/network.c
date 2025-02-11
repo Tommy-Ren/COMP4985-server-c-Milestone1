@@ -59,7 +59,6 @@ int sever_network(const Arguments *args)
     if(sockfd < 0)
     {
         perror("Failed to bind socket");
-        close(sockfd);
         sockfd = ERR_BIND;
         goto exit;
     }

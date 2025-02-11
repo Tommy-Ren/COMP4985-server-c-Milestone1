@@ -19,7 +19,17 @@ _Pragma("clang diagnostic ignored \"-Wdisabled-macro-expansion\"")
 #define PORT "8000"
 #define SIG_BUF 50
 
-    static volatile sig_atomic_t server_running;
+#if defined(__clang__) || defined(__GNUC__)
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wglobal-constructors"
+    #pragma GCC diagnostic ignored "-Wmissing-variable-declarations"
+#endif
+
+    static volatile sig_atomic_t server_running;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
+
+#if defined(__clang__) || defined(__GNUC__)
+    #pragma GCC diagnostic pop
+#endif
 
 static void handle_signal(int sig);
 static void process_req(int cfd);
