@@ -313,6 +313,36 @@ static int socket_create(int domain, int type, int protocol)
     return sockfd;
 }
 
+void setup_socket(struct sockaddr_storage *addr, socklen_t *addr_len, const char *address, in_port_t port, int *err)
+{
+    in_port_t net_port = htons(port);
+    memset(addr, 0, sizeof(struct sockaddr_storage));
+    *err = 0;
+
+    // Try to interpret the address as IPv4
+    if(inet_pton(AF_INET, address, &((struct sockaddr_in *)addr)->sin_addr) == 1)
+    {
+        struct sockaddr_in *ipv4_addr = (struct sockaddr_in *)addr;
+        ipv4_addr->sin_family         = AF_INET;
+        ipv4_addr->sin_port           = net_port;
+        *addr_len                     = sizeof(struct sockaddr_in);
+    }
+    // If IPv4 fails, try interpreting it as IPv6
+    else if(inet_pton(AF_INET6, address, &((struct sockaddr_in6 *)addr)->sin6_addr) == 1)
+    {
+        struct sockaddr_in6 *ipv6_addr = (struct sockaddr_in6 *)addr;
+        ipv6_addr->sin6_family         = AF_INET6;
+        ipv6_addr->sin6_port           = net_port;
+        *addr_len                      = sizeof(struct sockaddr_in6);
+    }
+    // If neither IPv4 nor IPv6, set an error
+    else
+    {
+        fprintf(stderr, "%s is not a valid IPv4 or IPv6 address\n", address);
+        *err = errno;
+    }
+}
+
 static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t port)
 {
     char      addr_str[INET6_ADDRSTRLEN];
