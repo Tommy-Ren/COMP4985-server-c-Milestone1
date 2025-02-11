@@ -7,10 +7,10 @@
 
 #include "../include/args.h"
 #include <netinet/in.h>
-#define ERR_NONE (-1)
-#define ERR_NO_DIGITS (-2)
-#define ERR_OUT_OF_RANGE (-3)
-#define ERR_INVALID_CHARS (-4)
+#define ERR_NONE (0)
+#define ERR_NO_DIGITS (-1)
+#define ERR_OUT_OF_RANGE (-2)
+#define ERR_INVALID_CHARS (-3)
 
 #define ERR_SOCKET (-1)
 #define ERR_SET_OPTION (-2)

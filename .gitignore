@@ -480,4 +480,6 @@ CMakeLists.txt
 
 build/
 
+# My own ignores
 .vscode/
+test.txt
