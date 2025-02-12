@@ -14,6 +14,7 @@
  * https://creativecommons.org/licenses/by-nc-nd/4.0/
  */
 
+#include "../include/user_db.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -49,12 +50,14 @@ static void           start_listening(int server_fd, int backlog);
 static int            socket_accept_connection(int server_fd, struct sockaddr_storage *client_addr, socklen_t *client_addr_len);
 static void           handle_connection(int client_sockfd, struct sockaddr_storage *client_addr);
 static void           shutdown_socket(int sockfd, int how);
+void                  setup_socket(struct sockaddr_storage *addr, socklen_t *addr_len, const char *address, in_port_t port, int *err);
 static void           socket_close(int sockfd);
 
 #define UNKNOWN_OPTION_MESSAGE_LEN 24
 #define BASE_TEN 10
 #define BER_MAX_PAYLOAD_SIZE 1024
 static volatile sig_atomic_t exit_flag = 0;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+static user_obj             *user_arr;         // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 int main(int argc, char *argv[])
 {
@@ -66,6 +69,7 @@ int main(int argc, char *argv[])
 
     address  = NULL;
     port_str = NULL;
+    user_arr = (user_obj *)calloc(1, sizeof(user_obj));    // allocate space for 1 user only since we're closing the socket almost immediately
     parse_arguments(argc, argv, &address, &port_str);
     handle_arguments(argv[0], address, port_str, &port);
     convert_address(address, &addr);
@@ -427,7 +431,13 @@ static int socket_accept_connection(int server_fd, struct sockaddr_storage *clie
 
     if(getnameinfo((struct sockaddr *)client_addr, *client_addr_len, client_host, NI_MAXHOST, client_service, NI_MAXSERV, 0) == 0)
     {
+        user_obj *user;
+
         printf("Accepted a new connection from %s:%s\n", client_host, client_service);
+        user        = new_user();
+        user->id    = client_fd;
+        user_arr[0] = *user;
+        printf("New User Added to List with ID: %d\n", user_arr[0].id);
     }
     else
     {
@@ -491,4 +501,6 @@ static void socket_close(int sockfd)
         perror("Error closing socket");
         exit(EXIT_FAILURE);
     }
+    memset(&user_arr[0], 0, sizeof(user_obj));
+    printf("Freed User from List\n");
 }
