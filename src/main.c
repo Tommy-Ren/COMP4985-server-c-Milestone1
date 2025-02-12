@@ -19,8 +19,6 @@ static void send_sys_success(uint8_t buf[], int fd, uint8_t packet_type);
 static void send_sys_error(uint8_t buf[], int fd, int err);
 static void send_acc_login_success(uint8_t buf[], int fd, uint16_t user_id);
 
-#define IP_ADDRESS "0.0.0.0"
-#define PORT "8000"
 static volatile sig_atomic_t server_running;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 int main(int argc, char *argv[])
@@ -31,16 +29,17 @@ int main(int argc, char *argv[])
     int       sockfd;
 
     memset(&args, 0, sizeof(Arguments));
-    args.ip   = IP_ADDRESS;
-    args.port = convert_port(argv[0], PORT);
+    args.ip   = NULL;    // Must be set via command-line args
+    args.port = 0;
 
     parse_args(argc, argv, &args);
-    check_args(argv[0], &args);
+    check_args(argv[0], &args);    // Ensures args are valid
 
     // Initialize user list
     init_user_list();
 
-    printf("Listening on %s:%d\n", args.ip, args.port);
+    printf("Listening on %s:%d\n", args.ip, args.port);    // Confirm correct values
+
     retval = EXIT_SUCCESS;
 
     sockfd = server_tcp_setup(&args);
@@ -107,7 +106,6 @@ int main(int argc, char *argv[])
             process_req(client_fd);
 
             // Wait for client to disconnect before cleanup
-
             while(recv(client_fd, buffer, sizeof(buffer), 0) > 0)
             {
                 // Keep reading until the client disconnects

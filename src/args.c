@@ -5,6 +5,8 @@
 #include <stdlib.h>
 
 #define OPTION_MESSAGE_LEN 50
+#define IP_ADDRESS "0.0.0.0"
+#define PORT "8000"
 
 _Noreturn void usage(const char *app_name, int exit_code, const char *message)
 {
@@ -32,7 +34,6 @@ void parse_args(int argc, char *argv[], Arguments *args)
         {NULL,      0,                 NULL, 0  }
     };
 
-    // Parse arguments
     while((opt = getopt_long(argc, argv, "ha:p:", long_options, NULL)) != -1)
     {
         switch(opt)
@@ -49,7 +50,6 @@ void parse_args(int argc, char *argv[], Arguments *args)
                 if(optopt != 'a' && optopt != 'p')
                 {
                     char message[OPTION_MESSAGE_LEN];
-
                     snprintf(message, sizeof(message), "Unknown option '-%c'.", optopt);
                     usage(argv[0], EXIT_FAILURE, message);
                 }
@@ -57,6 +57,16 @@ void parse_args(int argc, char *argv[], Arguments *args)
             default:
                 usage(argv[0], EXIT_FAILURE, NULL);
         }
+    }
+
+    // Apply defaults if no arguments were given
+    if(args->ip == NULL)
+    {
+        args->ip = IP_ADDRESS;    // Default to 0.0.0.0
+    }
+    if(args->port == 0)
+    {
+        args->port = convert_port(argv[0], PORT);
     }
 }
 
