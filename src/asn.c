@@ -4,6 +4,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+static int  decode_uint8(const uint8_t buf[], int pos);
+static int  decode_uint16(const uint8_t buf[], int pos);
+static int  decode_int(const uint8_t buf[], int pos);
+static int  decode_enum(const uint8_t buf[], int pos);
+static int  decode_str(const uint8_t buf[], int pos);
+static int  decode_time(const uint8_t buf[], int pos);
+static int  check_header(const header_t *header);
+static void print_header(const header_t *header);
+static int  decode_field(const uint8_t buf[], int pos);
+static void encode_header(uint8_t buf[], const header_t *header);
+
 /*
  * Errors
  * -1 Unrecognized Tag Type

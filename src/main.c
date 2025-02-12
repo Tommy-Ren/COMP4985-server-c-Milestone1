@@ -58,7 +58,6 @@ int main(int argc, char *argv[])
         int                     client_fd;
         struct sockaddr_storage client_addr;
         socklen_t               client_addr_len;
-        user_obj               *user;
 
         client_addr_len = sizeof(struct sockaddr_storage);
         memset(&client_addr, 0, client_addr_len);
@@ -70,23 +69,6 @@ int main(int argc, char *argv[])
             {
                 break;
             }
-            continue;
-        }
-
-        // Create a new user entry
-        user = new_user();
-        if(user == NULL)
-        {
-            close(client_fd);
-            continue;
-        }
-
-        user->id = client_fd;    // Assign user ID as socket FD for now
-
-        if(add_user(user) == -1)
-        {
-            free(user);    // Free memory if list is full
-            close(client_fd);
             continue;
         }
 
