@@ -1,29 +1,15 @@
-//
-// Created by tommy on 2/11/25.
-//
-
 #ifndef NETWORK_H
 #define NETWORK_H
 
 #include "../include/args.h"
-#include <netinet/in.h>
-#define ERR_NONE (0)
-#define ERR_NO_DIGITS (-1)
-#define ERR_OUT_OF_RANGE (-2)
-#define ERR_INVALID_CHARS (-3)
+#include "../include/message.h"
+#include "../include/user_db.h"
 
-#define ERR_SOCKET (-1)
-#define ERR_SET_OPTION (-2)
-#define ERR_BIND (-3)
-#define ERR_LISTEN (-4)
+int server_tcp_setup(const Arguments *args);
 
-// Function to set up address
-int sever_network(const Arguments *args);
-
-// Convert port if network socket as input
-in_port_t convert_port(const char *str, int *err);
-
-// free all resources
-void null_free(void **ptr);
+int       socket_accept(int server_fd, struct sockaddr_storage *client_addr, socklen_t *client_addr_len);
+in_port_t convert_port(const char *binary_name, const char *str);
+void      shutdown_socket(int sockfd, int how);
+void      socket_close(int sockfd);
 
 #endif    // NETWORK_H

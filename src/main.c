@@ -11,81 +11,36 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#if defined(__linux__) && defined(__clang__)
-_Pragma("clang diagnostic ignored \"-Wdisabled-macro-expansion\"")
-#endif
-
-#define IP_ADDRESS "0.0.0.0"
-#define PORT "8000"
-#define SIG_BUF 50
-
-#if defined(__clang__) || defined(__GNUC__)
-    #pragma GCC diagnostic push
-    #pragma GCC diagnostic ignored "-Wglobal-constructors"
-    #pragma GCC diagnostic ignored "-Wmissing-variable-declarations"
-#endif
-
-    static volatile sig_atomic_t server_running;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
-
-#if defined(__clang__) || defined(__GNUC__)
-    #pragma GCC diagnostic pop
-#endif
-
-static void handle_signal(int sig);
+static void setup_signal_handler(void);
+static void sigint_handler(int signum);
 static void process_req(int cfd);
 static void send_sys_success(uint8_t buf[], int fd, uint8_t packet_type);
 static void send_sys_error(uint8_t buf[], int fd, int err);
 static void send_acc_login_success(uint8_t buf[], int fd, uint16_t user_id);
 
-static void handle_signal(int sig)
-{
-    char message[SIG_BUF];
-
-    snprintf(message, sizeof(message), "Caught signal: %d (%s)\n", sig, strsignal(sig));
-    write(STDOUT_FILENO, message, strlen(message));
-
-    if(sig == SIGINT)
-    {
-        server_running = 0;
-        snprintf(message, sizeof(message), "%s\n", "Server is shutting down...");
-    }
-    write(STDOUT_FILENO, message, strlen(message));
-}
+#define IP_ADDRESS "0.0.0.0"
+#define PORT "8000"
+static volatile sig_atomic_t server_running;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 int main(int argc, char *argv[])
 {
-    int              retval;    // Return value
-    int              err;       // Error code
-    pid_t            pid;       // Process ID
-    Arguments        args;      // Arguments
-    struct sigaction sa;        // Signal action
-    int              sockfd;    // Socket file descriptor
-
-    // Set Ctrl-C override.
-    sa.sa_handler = handle_signal;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-
-    // signal handler
-    if(sigaction(SIGINT, &sa, NULL) == -1)
-    {
-        perror("sigaction");
-        exit(EXIT_FAILURE);
-    }
-
-    printf("Server is running... (press Ctrl+C to interrupt)\n");
+    Arguments args;      // Arguments
+    pid_t     pid;       // Process ID
+    int       retval;    // Return value
+    int       sockfd;    // Socket file descriptor
 
     memset(&args, 0, sizeof(Arguments));
     args.ip   = IP_ADDRESS;
-    args.port = convert_port(PORT, &err);
+    args.port = convert_port(argv[0], PORT);
 
-    parse_args(&args, argc, argv);
+    parse_args(argc, argv, &args);
     check_args(argv[0], &args);
-    printf("Listening on %s: %d\n", args.ip, args.port);
+
+    printf("Listening on %s:%d\n", args.ip, args.port);
     retval = EXIT_SUCCESS;
 
     // Connect to the network
-    sockfd = sever_network(&args);
+    sockfd = server_tcp_setup(&args);
     if(sockfd < 0)
     {
         perror("Failed to create server network");
@@ -94,52 +49,85 @@ int main(int argc, char *argv[])
     }
 
     // Wait for clients' connections
-    err            = 0;
+    setup_signal_handler();
     server_running = 1;
     while(server_running)
     {
-        int                cfd;      // Client file descriptor
-        struct sockaddr_in caddr;    // Client address
-        socklen_t          csize;    // Client size
+        int                     client_fd;          // Client file descriptor
+        struct sockaddr_storage client_addr;        // Client address
+        socklen_t               client_addr_len;    // Client size
 
         // !!BLOCKING!! Get client connection
-        csize = sizeof(struct sockaddr_in);
-        memset(&caddr, 0, csize);
+        client_addr_len = sizeof(struct sockaddr_storage);
+        memset(&client_addr, 0, client_addr_len);
 
-        errno = 0;
-        cfd   = accept(sockfd, (struct sockaddr *)&caddr, &csize);
-        if(cfd < 0)
+        client_fd = socket_accept(sockfd, &client_addr, &client_addr_len);
+        if(client_fd < 0)
         {
-            perror("Failed to accept client connection");
+            if(!server_running)
+            {
+                break;
+            }
             continue;
         }
 
-        printf("New connection from: %s:%d\n", inet_ntoa(caddr.sin_addr), caddr.sin_port);
-
         // Fork the process
-        errno = 0;
-        pid   = fork();
+        pid = fork();
         if(pid < 0)
         {
             perror("main::fork");
-            close(cfd);
+            close(client_fd);
             continue;
         }
 
+        // If child process, process the request
         if(pid == 0)
         {
-            process_req(cfd);
-            close(cfd);
+            process_req(client_fd);
+            close(client_fd);
             goto exit;
         }
 
-        close(cfd);
+        close(client_fd);
     }
 
 exit:
     close(sockfd);
     return retval;
 }
+
+static void setup_signal_handler(void)
+{
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof(sa));
+#if defined(__clang__)
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wdisabled-macro-expansion"
+#endif
+    sa.sa_handler = sigint_handler;
+#if defined(__clang__)
+    #pragma clang diagnostic pop
+#endif
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    if(sigaction(SIGINT, &sa, NULL) == -1)
+    {
+        perror("sigaction");
+        exit(EXIT_FAILURE);
+    }
+}
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+
+static void sigint_handler(int signum)
+{
+    server_running = 0;
+}
+
+#pragma GCC diagnostic pop
 
 static void process_req(int cfd)
 {

@@ -14,7 +14,7 @@ typedef struct Arguments
 _Noreturn void usage(const char *app_name, int exit_code, const char *message);
 
 // checks arguments
-void parse_args(Arguments *args, int argc, char *argv[]);
+void parse_args(int argc, char *argv[], Arguments *args);
 
 // starts server or connects client to server
 void check_args(const char *program, const Arguments *args);

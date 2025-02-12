@@ -21,10 +21,9 @@ _Noreturn void usage(const char *app_name, int exit_code, const char *message)
     exit(exit_code);
 }
 
-void parse_args(Arguments *args, int argc, char *argv[])
+void parse_args(int argc, char *argv[], Arguments *args)
 {
     int opt;
-    int err;
 
     static struct option long_options[] = {
         {"address", required_argument, NULL, 'a'},
@@ -42,11 +41,7 @@ void parse_args(Arguments *args, int argc, char *argv[])
                 args->ip = optarg;
                 break;
             case 'p':
-                args->port = convert_port(optarg, &err);
-                if(err != 0)
-                {
-                    usage(argv[0], EXIT_FAILURE, "Port must be between 1 and 65535");
-                }
+                args->port = convert_port(argv[0], optarg);
                 break;
             case 'h':
                 usage(argv[0], EXIT_SUCCESS, NULL);
