@@ -103,8 +103,18 @@ int main(int argc, char *argv[])
 
         if(pid == 0)    // Child process
         {
+            char buffer[1];
             process_req(client_fd);
-            remove_user(client_fd);    // Remove user after processing request
+
+            // Wait for client to disconnect before cleanup
+
+            while(recv(client_fd, buffer, sizeof(buffer), 0) > 0)
+            {
+                // Keep reading until the client disconnects
+            }
+
+            printf("Client %d disconnected, removing from list.\n", client_fd);
+            remove_user(client_fd);
             close(client_fd);
             goto exit;
         }

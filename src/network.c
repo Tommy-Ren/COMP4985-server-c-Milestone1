@@ -244,7 +244,6 @@ int socket_accept(int server_fd, struct sockaddr_storage *client_addr, socklen_t
     return client_fd;
 }
 
-
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
