@@ -1,6 +1,7 @@
 #include "../include/args.h"
 #include "../include/asn.h"
 #include "../include/network.h"
+#include "../include/user_db.h"    // Include user database header
 #include <errno.h>
 #include <memory.h>
 #include <netinet/in.h>
@@ -24,10 +25,10 @@ static volatile sig_atomic_t server_running;    // NOLINT(cppcoreguidelines-avoi
 
 int main(int argc, char *argv[])
 {
-    Arguments args;      // Arguments
-    pid_t     pid;       // Process ID
-    int       retval;    // Return value
-    int       sockfd;    // Socket file descriptor
+    Arguments args;
+    pid_t     pid;
+    int       retval;
+    int       sockfd;
 
     memset(&args, 0, sizeof(Arguments));
     args.ip   = IP_ADDRESS;
@@ -36,10 +37,12 @@ int main(int argc, char *argv[])
     parse_args(argc, argv, &args);
     check_args(argv[0], &args);
 
+    // Initialize user list
+    init_user_list();
+
     printf("Listening on %s:%d\n", args.ip, args.port);
     retval = EXIT_SUCCESS;
 
-    // Connect to the network
     sockfd = server_tcp_setup(&args);
     if(sockfd < 0)
     {
@@ -48,16 +51,16 @@ int main(int argc, char *argv[])
         goto exit;
     }
 
-    // Wait for clients' connections
     setup_signal_handler();
     server_running = 1;
+
     while(server_running)
     {
-        int                     client_fd;          // Client file descriptor
-        struct sockaddr_storage client_addr;        // Client address
-        socklen_t               client_addr_len;    // Client size
+        int                     client_fd;
+        struct sockaddr_storage client_addr;
+        socklen_t               client_addr_len;
+        user_obj               *user;
 
-        // !!BLOCKING!! Get client connection
         client_addr_len = sizeof(struct sockaddr_storage);
         memset(&client_addr, 0, client_addr_len);
 
@@ -71,19 +74,37 @@ int main(int argc, char *argv[])
             continue;
         }
 
+        // Create a new user entry
+        user = new_user();
+        if(user == NULL)
+        {
+            close(client_fd);
+            continue;
+        }
+
+        user->id = client_fd;    // Assign user ID as socket FD for now
+
+        if(add_user(user) == -1)
+        {
+            free(user);    // Free memory if list is full
+            close(client_fd);
+            continue;
+        }
+
         // Fork the process
         pid = fork();
         if(pid < 0)
         {
             perror("main::fork");
+            remove_user(client_fd);    // Remove user on fork failure
             close(client_fd);
             continue;
         }
 
-        // If child process, process the request
-        if(pid == 0)
+        if(pid == 0)    // Child process
         {
             process_req(client_fd);
+            remove_user(client_fd);    // Remove user after processing request
             close(client_fd);
             goto exit;
         }
@@ -166,8 +187,7 @@ static void send_sys_success(uint8_t buf[], int fd, uint8_t packet_type)
 
 static void send_sys_error(uint8_t buf[], int fd, int err)
 {
-    int len = 0;
-    len     = encode_sys_error_res(buf, err);
+    int len = encode_sys_error_res(buf, err);
     write(fd, buf, (size_t)len);
 }
 

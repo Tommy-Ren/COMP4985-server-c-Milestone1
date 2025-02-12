@@ -26,7 +26,7 @@ static void start_listen(int server_fd, int backlog);
 #define ERR_BIND (-3)
 #define ERR_LISTEN (-4)
 
-static user_obj *user_arr;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+// static user_obj *user_arr;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 // Function to set up the network server
 int server_tcp_setup(const Arguments *args)
@@ -218,12 +218,23 @@ int socket_accept(int server_fd, struct sockaddr_storage *client_addr, socklen_t
     if(getnameinfo((struct sockaddr *)client_addr, *client_addr_len, client_host, NI_MAXHOST, client_service, NI_MAXSERV, 0) == 0)
     {
         user_obj *user;
-
         printf("Accepted a new connection from %s:%s\n", client_host, client_service);
-        user        = new_user();
-        user->id    = client_fd;
-        user_arr[0] = *user;
-        printf("New User Added to List with ID: %d\n", user_arr[0].id);
+
+        user = new_user();
+        if(!user)
+        {
+            close(client_fd);
+            return -1;
+        }
+
+        user->id = client_fd;    // Assign socket FD as user ID for now
+
+        if(add_user(user) == -1)
+        {
+            free(user);    // Free memory if the list is full
+            close(client_fd);
+            return -1;
+        }
     }
     else
     {
@@ -232,6 +243,7 @@ int socket_accept(int server_fd, struct sockaddr_storage *client_addr, socklen_t
 
     return client_fd;
 }
+
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
@@ -283,6 +295,9 @@ void socket_close(int sockfd)
         perror("Error closing socket");
         exit(EXIT_FAILURE);
     }
-    memset(&user_arr[0], 0, sizeof(user_obj));
+    if(user_arr[0] != NULL)
+    {
+        memset(user_arr[0], 0, sizeof(user_obj));    // Properly reset the structure
+    }
     printf("Freed User from List\n");
 }
