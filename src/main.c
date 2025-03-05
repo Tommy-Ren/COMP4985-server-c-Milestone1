@@ -1,5 +1,6 @@
 #include "../include/args.h"
 #include "../include/asn.h"
+#include "../include/logging.h"
 #include "../include/network.h"
 #include "../include/user_db.h"    // Include user database header
 #include <errno.h>
@@ -10,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <syslog.h>
 #include <unistd.h>
 
 static void setup_signal_handler(void);
@@ -29,15 +31,21 @@ int main(int argc, char *argv[])
     int       retval;
     int       sockfd;
 
+    openlog("Server C", LOG_PID, LOG_USER);
     memset(&args, 0, sizeof(Arguments));
     args.ip   = NULL;    // Must be set via command-line args
     args.port = 0;
 
+    server_log(1, "Parsing arguments...", LOG_INFO);
     parse_args(argc, argv, &args);
+    server_log(1, "Arguments parsed, validating arguments...", LOG_INFO);
     check_args(argv[0], &args);    // Ensures args are valid
+    server_log(1, "Arguments validated", LOG_INFO);
 
+    server_log(1, "Initializing user list...", LOG_INFO);
     // Initialize user list
     init_user_list();
+    server_log(1, "User list initialized!", LOG_INFO);
 
     printf("Listening on %s:%d\n", args.ip, args.port);    // Confirm correct values
 
@@ -46,6 +54,7 @@ int main(int argc, char *argv[])
     sockfd = server_tcp_setup(&args);
     if(sockfd < 0)
     {
+        server_log(1, "Error initializing user list...", LOG_ERR);
         perror("Failed to create server network");
         retval = EXIT_FAILURE;
         goto exit;
@@ -68,6 +77,7 @@ int main(int argc, char *argv[])
         {
             if(!server_running)
             {
+                server_log(1, "Shutting down server...", LOG_NOTICE);
                 break;
             }
             continue;
@@ -97,6 +107,7 @@ int main(int argc, char *argv[])
             printf("Client %d disconnected, removing from list.\n", client_fd);
             remove_user(client_fd);
             close(client_fd);
+            server_log(1, "User disconnected", LOG_NOTICE);
             goto exit;
         }
 
@@ -105,6 +116,7 @@ int main(int argc, char *argv[])
 
 exit:
     close(sockfd);
+    server_log(1, "Server shutdown successfully!", LOG_NOTICE);
     return retval;
 }
 
