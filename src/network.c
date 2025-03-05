@@ -1,3 +1,5 @@
+/* network.c */
+
 #include "../include/network.h"
 #include "../include/user_db.h"
 #include <arpa/inet.h>
@@ -26,12 +28,13 @@ static void start_listen(int server_fd, int backlog);
 #define ERR_BIND (-3)
 #define ERR_LISTEN (-4)
 
-// static user_obj *user_arr;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
-
-// Function to set up the network server
+/*
+ * Function: server_tcp_setup
+ * Description: Sets up a TCP server using the provided arguments.
+ * Returns: The server socket descriptor on success or an error code on failure.
+ */
 int server_tcp_setup(const Arguments *args)
 {
-    // Initialize variables
     int                     err;
     int                     sockfd;
     struct sockaddr_storage addr;
@@ -42,10 +45,10 @@ int server_tcp_setup(const Arguments *args)
 
     memset(&addr, 0, sizeof(struct sockaddr_storage));
 
-    // Set up the address structure
+    /* Set up the address structure */
     socket_setup(&addr, &addr_len, args, &err);
 
-    // Create the socket
+    /* Create the socket */
     sockfd = socket_create(addr.ss_family, SOCK_STREAM, 0);
     if(sockfd < 0)
     {
@@ -55,7 +58,7 @@ int server_tcp_setup(const Arguments *args)
         goto exit;
     }
 
-    // Set socket options
+    /* Set socket options */
     errno = 0;
     if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0)
     {
@@ -64,7 +67,7 @@ int server_tcp_setup(const Arguments *args)
         goto exit;
     }
 
-    // Bind the socket
+    /* Bind the socket */
     socket_bind(sockfd, &addr, args->port);
     if(sockfd < 0)
     {
@@ -73,7 +76,7 @@ int server_tcp_setup(const Arguments *args)
         goto exit;
     }
 
-    // Start listening
+    /* Start listening */
     start_listen(sockfd, SOMAXCONN);
     if(listen(sockfd, SOMAXCONN) < 0)
     {
@@ -87,30 +90,37 @@ exit:
     return sockfd;
 }
 
-// Set up address structure
+/* Set up address structure */
 static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const Arguments *args, int *err)
 {
-    in_port_t net_port = htons(args->port);
+    in_port_t net_port;
+    net_port = htons(args->port);
     memset(addr, 0, sizeof(struct sockaddr_storage));
     *err = 0;
 
-    // Try to interpret the address as IPv4
+    /* Try to interpret the address as IPv4 */
     if(inet_pton(AF_INET, args->ip, &((struct sockaddr_in *)addr)->sin_addr) == 1)
     {
-        struct sockaddr_in *ipv4_addr = (struct sockaddr_in *)addr;
-        ipv4_addr->sin_family         = AF_INET;
-        ipv4_addr->sin_port           = net_port;
-        *addr_len                     = sizeof(struct sockaddr_in);
+        {
+            struct sockaddr_in *ipv4_addr;
+            ipv4_addr             = (struct sockaddr_in *)addr;
+            ipv4_addr->sin_family = AF_INET;
+            ipv4_addr->sin_port   = net_port;
+            *addr_len             = sizeof(struct sockaddr_in);
+        }
     }
-    // If IPv4 fails, try interpreting it as IPv6
+    /* If IPv4 fails, try interpreting it as IPv6 */
     else if(inet_pton(AF_INET6, args->ip, &((struct sockaddr_in6 *)addr)->sin6_addr) == 1)
     {
-        struct sockaddr_in6 *ipv6_addr = (struct sockaddr_in6 *)addr;
-        ipv6_addr->sin6_family         = AF_INET6;
-        ipv6_addr->sin6_port           = net_port;
-        *addr_len                      = sizeof(struct sockaddr_in6);
+        {
+            struct sockaddr_in6 *ipv6_addr;
+            ipv6_addr              = (struct sockaddr_in6 *)addr;
+            ipv6_addr->sin6_family = AF_INET6;
+            ipv6_addr->sin6_port   = net_port;
+            *addr_len              = sizeof(struct sockaddr_in6);
+        }
     }
-    // If neither IPv4 nor IPv6, set an error
+    /* If neither IPv4 nor IPv6, set an error */
     else
     {
         fprintf(stderr, "%s is not a valid IPv4 or IPv6 address\n", args->ip);
@@ -118,21 +128,20 @@ static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, con
     }
 }
 
+/* Create a socket */
 static int socket_create(int domain, int type, int protocol)
 {
     int sockfd;
-
     sockfd = socket(domain, type, protocol);
-
     if(sockfd == -1)
     {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
-
     return sockfd;
 }
 
+/* Bind the socket to an address */
 static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t port)
 {
     char      addr_str[INET6_ADDRSTRLEN];
@@ -145,7 +154,6 @@ static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t por
     if(addr->ss_family == AF_INET)
     {
         struct sockaddr_in *ipv4_addr;
-
         ipv4_addr           = (struct sockaddr_in *)addr;
         addr_len            = sizeof(*ipv4_addr);
         ipv4_addr->sin_port = net_port;
@@ -154,7 +162,6 @@ static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t por
     else if(addr->ss_family == AF_INET6)
     {
         struct sockaddr_in6 *ipv6_addr;
-
         ipv6_addr            = (struct sockaddr_in6 *)addr;
         addr_len             = sizeof(*ipv6_addr);
         ipv6_addr->sin6_port = net_port;
@@ -184,6 +191,7 @@ static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t por
     printf("Bound to socket: %s:%u\n", addr_str, port);
 }
 
+/* Start listening on the socket */
 static void start_listen(int server_fd, int backlog)
 {
     if(listen(server_fd, backlog) == -1)
@@ -192,10 +200,10 @@ static void start_listen(int server_fd, int backlog)
         close(server_fd);
         exit(EXIT_FAILURE);
     }
-
     printf("Listening for incoming connections...\n");
 }
 
+/* Accept a client connection */
 int socket_accept(int server_fd, struct sockaddr_storage *client_addr, socklen_t *client_addr_len)
 {
     int  client_fd;
@@ -204,14 +212,12 @@ int socket_accept(int server_fd, struct sockaddr_storage *client_addr, socklen_t
 
     errno     = 0;
     client_fd = accept(server_fd, (struct sockaddr *)client_addr, client_addr_len);
-
     if(client_fd == -1)
     {
         if(errno != EINTR)
         {
             perror("Failed to accept client connection");
         }
-
         return -1;
     }
 
@@ -219,19 +225,16 @@ int socket_accept(int server_fd, struct sockaddr_storage *client_addr, socklen_t
     {
         user_obj *user;
         printf("Accepted a new connection from %s:%s\n", client_host, client_service);
-
         user = new_user();
         if(!user)
         {
             close(client_fd);
             return -1;
         }
-
-        user->id = client_fd;    // Assign socket FD as user ID for now
-
+        user->id = client_fd; /* Assign socket FD as user ID for now */
         if(add_user(user) == -1)
         {
-            free(user);    // Free memory if the list is full
+            free(user);
             close(client_fd);
             return -1;
         }
@@ -240,13 +243,13 @@ int socket_accept(int server_fd, struct sockaddr_storage *client_addr, socklen_t
     {
         printf("Unable to get client information\n");
     }
-
     return client_fd;
 }
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
+/* Convert port from string to in_port_t */
 in_port_t convert_port(const char *binary_name, const char *str)
 {
     char     *endptr;
@@ -254,30 +257,25 @@ in_port_t convert_port(const char *binary_name, const char *str)
 
     errno        = 0;
     parsed_value = strtoumax(str, &endptr, BASE_TEN);
-
     if(errno != 0)
     {
         perror("Error parsing in_port_t");
         exit(EXIT_FAILURE);
     }
-
-    // Check if there are any non-numeric characters in the input string
     if(*endptr != '\0')
     {
         usage(binary_name, EXIT_FAILURE, "Invalid characters in input.");
     }
-
-    // Check if the parsed value is within the valid range for in_port_t
     if(parsed_value > UINT16_MAX)
     {
         usage(binary_name, EXIT_FAILURE, "in_port_t value out of range.");
     }
-
     return (in_port_t)parsed_value;
 }
 
 #pragma GCC diagnostic pop
 
+/* Shutdown a socket */
 void shutdown_socket(int sockfd, int how)
 {
     if(shutdown(sockfd, how) == -1)
@@ -287,6 +285,7 @@ void shutdown_socket(int sockfd, int how)
     }
 }
 
+/* Close a socket; note: obsolete references to user_arr have been removed */
 void socket_close(int sockfd)
 {
     if(close(sockfd) == -1)
@@ -294,9 +293,5 @@ void socket_close(int sockfd)
         perror("Error closing socket");
         exit(EXIT_FAILURE);
     }
-    if(user_arr[0] != NULL)
-    {
-        memset(user_arr[0], 0, sizeof(user_obj));    // Properly reset the structure
-    }
-    printf("Freed User from List\n");
+    printf("Socket %d closed successfully.\n", sockfd);
 }
