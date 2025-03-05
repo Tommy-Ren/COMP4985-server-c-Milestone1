@@ -7,19 +7,21 @@
 
 #include <stdint.h>
 
-#define HEADERLEN (6)
-#define TIMESTRLEN (15)
-#define PACKETLEN (777)
-#define SYSID (0)
-#define CURRVER (1)
-#define U8ENCODELEN (3)
-#define SYS_SUCCESS_LEN (3)
-#define ACC_LOGIN_SUCCESS_LEN (4)
-#define UNRECOGNIZEDTAGTYPE (-1)
-#define INVALIDINTEGERLENGTH (-2)
-#define FIELDLENGTHOFZERO (-3)
-#define UNRECOGNIZEDPACKETTYPE (-4)
-#define UNSUPPORTEDVERSION (-5)
+#define HEADERLEN 6
+#define TIMESTRLEN 15
+#define PACKETLEN 777
+#define MAXPAYLOADLEN 771 /* This is the size of 3 strings + taglen */
+#define SYSID 0
+#define CURRVER 2
+#define U8ENCODELEN 3
+#define SYS_SUCCESS_LEN 3
+#define ACC_LOGIN_SUCCESS_LEN 4
+#define UNRECOGNIZEDTAGTYPE -1
+#define INVALIDINTEGERLENGTH -2
+#define FIELDLENGTHOFZERO -3
+#define UNRECOGNIZEDPACKETTYPE -4
+#define UNSUPPORTEDVERSION -5
+#define EXCEEDMAXPAYLOAD -6
 
 enum ASNTag
 {
@@ -73,5 +75,6 @@ int  decode_packet(const uint8_t buf[], const header_t *header);
 int  encode_sys_success_res(uint8_t buf[], uint8_t packet_type);
 int  encode_sys_error_res(uint8_t buf[], int err);
 int  encode_acc_login_success_res(uint8_t buf[], uint16_t user_id);
+int  encode_cht_send(uint8_t buf[]);
 
 #endif    // ASN_H

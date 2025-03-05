@@ -14,7 +14,7 @@
 
 static void setup_signal_handler(void);
 static void sigint_handler(int signum);
-static void process_req(int cfd);
+static int  process_req(int cfd);
 static void send_sys_success(uint8_t buf[], int fd, uint8_t packet_type);
 static void send_sys_error(uint8_t buf[], int fd, int err);
 static void send_acc_login_success(uint8_t buf[], int fd, uint16_t user_id);
@@ -140,33 +140,59 @@ static void sigint_handler(int signum)
 
 #pragma GCC diagnostic pop
 
-static void process_req(int cfd)
+static int process_req(int cfd)
 {
-    int      err;
     header_t header = {0};
     uint8_t  buf[PACKETLEN];
-
-    read(cfd, buf, HEADERLEN);
-    decode_header(buf, &header);
-
-    read(cfd, buf + HEADERLEN, header.payload_len);
-    err = decode_packet(buf, &header);
+    int      result;
 
     memset(buf, 0, PACKETLEN);
-    if(err < 0)
+    if(read(cfd, buf, HEADERLEN) < HEADERLEN)
     {
-        send_sys_error(buf, cfd, err);
+        return -1;
+    }
+    decode_header(buf, &header);
+
+    if(read(cfd, buf + HEADERLEN, header.payload_len) < header.payload_len)
+    {
+        return -1;
+    }
+    result = decode_packet(buf, &header);
+
+    memset(buf, 0, PACKETLEN);
+    if(result < 0)
+    {
+        send_sys_error(buf, cfd, result);
+        return SYS_ERROR;
     }
 
     if(header.packet_type == ACC_LOGIN)
     {
         send_acc_login_success(buf, cfd, 1); /* 1 for testing only */
+        return ACC_LOGIN_SUCCESS;
     }
 
-    if(header.packet_type == ACC_LOGOUT || header.packet_type == ACC_CREATE || header.packet_type == ACC_EDIT)
+    if(header.packet_type == ACC_CREATE || header.packet_type == ACC_EDIT)
     {
         send_sys_success(buf, cfd, header.packet_type);
+        return SYS_SUCCESS;
     }
+
+    if(header.packet_type == ACC_LOGOUT)
+    {
+        // no response
+        return ACC_LOGOUT;
+    }
+
+    if(header.packet_type == CHT_SEND)
+    {
+        send_sys_success(buf, cfd, header.packet_type);
+
+        // send an example of a chat message from another user.
+        send_cht_send(buf, cfd);
+        return CHT_SEND;
+    }
+    return -1;
 }
 
 static void send_sys_success(uint8_t buf[], int fd, uint8_t packet_type)
@@ -184,5 +210,11 @@ static void send_sys_error(uint8_t buf[], int fd, int err)
 static void send_acc_login_success(uint8_t buf[], int fd, uint16_t user_id)
 {
     int len = encode_acc_login_success_res(buf, user_id);
+    write(fd, buf, (size_t)len);
+}
+
+static void send_cht_send(uint8_t buf[], int fd)
+{
+    int len = encode_cht_send(buf);
     write(fd, buf, (size_t)len);
 }
