@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const Arguments *args, int *err);
+static void sm_socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const Arguments *args, int *err);
 static int  socket_create(int domain, int type, int protocol);
 static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t port);
 static void start_listen(int server_fd, int backlog);
@@ -27,6 +28,7 @@ static void start_listen(int server_fd, int backlog);
 #define ERR_SET_OPTION (-2)
 #define ERR_BIND (-3)
 #define ERR_LISTEN (-4)
+#define ERR_CONNECT (-5)
 
 /*
  * Function: server_tcp_setup
@@ -90,6 +92,44 @@ exit:
     return sockfd;
 }
 
+int client_tcp_setup(const Arguments *args)
+{
+    int                     err;
+    int                     sm_fd;
+    struct sockaddr_storage addr;
+    socklen_t               addr_len;
+
+    addr_len = 0;
+    err      = ERR_NONE;
+
+    memset(&addr, 0, sizeof(struct sockaddr_storage));
+
+    /* Set up the address structure */
+    sm_socket_setup(&addr, &addr_len, args, &err);
+
+    /* Create the socket */
+    sm_fd = socket_create(addr.ss_family, SOCK_STREAM, 0);
+    if(sm_fd < 0)
+    {
+        errno = err;
+        perror("Failed to create socket to server manager");
+        sm_fd = ERR_SOCKET;
+        goto exit;
+    }
+
+    /* Set socket options */
+    errno = 0;
+    if(connect(sm_fd, (struct sockaddr *)&addr, addr_len) < 0)
+    {
+        perror("Failed to connect to server manager");
+        sm_fd = ERR_CONNECT;
+        goto exit;
+    }
+
+exit:
+    return sm_fd;
+}
+
 /* Set up address structure */
 static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const Arguments *args, int *err)
 {
@@ -124,6 +164,43 @@ static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, con
     else
     {
         fprintf(stderr, "%s is not a valid IPv4 or IPv6 address\n", args->ip);
+        *err = errno;
+    }
+}
+
+static void sm_socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const Arguments *args, int *err)
+{
+    in_port_t net_port;
+    net_port = htons(args->sm_port);
+    memset(addr, 0, sizeof(struct sockaddr_storage));
+    *err = 0;
+
+    /* Try to interpret the address as IPv4 */
+    if(inet_pton(AF_INET, args->sm_ip, &((struct sockaddr_in *)addr)->sin_addr) == 1)
+    {
+        {
+            struct sockaddr_in *ipv4_addr;
+            ipv4_addr             = (struct sockaddr_in *)addr;
+            ipv4_addr->sin_family = AF_INET;
+            ipv4_addr->sin_port   = net_port;
+            *addr_len             = sizeof(struct sockaddr_in);
+        }
+    }
+    /* If IPv4 fails, try interpreting it as IPv6 */
+    else if(inet_pton(AF_INET6, args->sm_ip, &((struct sockaddr_in6 *)addr)->sin6_addr) == 1)
+    {
+        {
+            struct sockaddr_in6 *ipv6_addr;
+            ipv6_addr              = (struct sockaddr_in6 *)addr;
+            ipv6_addr->sin6_family = AF_INET6;
+            ipv6_addr->sin6_port   = net_port;
+            *addr_len              = sizeof(struct sockaddr_in6);
+        }
+    }
+    /* If neither IPv4 nor IPv6, set an error */
+    else
+    {
+        fprintf(stderr, "%s is not a valid IPv4 or IPv6 address\n", args->sm_ip);
         *err = errno;
     }
 }
@@ -178,8 +255,6 @@ static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t por
         perror("inet_ntop");
         exit(EXIT_FAILURE);
     }
-
-    printf("Binding to: %s:%u\n", addr_str, port);
 
     if(bind(sockfd, (struct sockaddr *)addr, addr_len) == -1)
     {
@@ -266,7 +341,7 @@ in_port_t convert_port(const char *binary_name, const char *str)
     {
         usage(binary_name, EXIT_FAILURE, "Invalid characters in input.");
     }
-    if(parsed_value > UINT16_MAX)
+    if(parsed_value < 1 || parsed_value > UINT16_MAX)
     {
         usage(binary_name, EXIT_FAILURE, "in_port_t value out of range.");
     }
