@@ -1,6 +1,29 @@
-/* user_db.c - Refactored to use DBM for persistent user management */
-/* ISO C90 compliant version */
-/* This file is aligned with the protocol design for account and chat management */
+/*******************************************************************************
+ * User Database Management System
+ * 
+ * This module provides a persistent storage interface for user management using
+ * DBM (Database Manager) for data storage. It supports basic CRUD operations:
+ * - Creating new users
+ * - Retrieving user information
+ * - Updating user records
+ * - Deleting users
+ * - Listing all users
+ * 
+ * The implementation uses GDBM on Linux/FreeBSD and NDBM on macOS, providing
+ * cross-platform compatibility through conditional compilation.
+ * 
+ * Data Storage:
+ * - Keys: User IDs stored as strings
+ * - Values: Binary serialized user_obj structures
+ * 
+ * Dependencies:
+ * - GDBM/NDBM library
+ * - user_db.h for structure definitions
+ * 
+ * Usage:
+ * Call init_user_list() before any operations and close_user_list() when done.
+ ******************************************************************************/
+
 
 #include "../include/user_db.h"
 #include <fcntl.h>
