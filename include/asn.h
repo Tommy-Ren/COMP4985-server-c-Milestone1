@@ -7,21 +7,21 @@
 
 #include <stdint.h>
 
-#define HEADERLEN 6
-#define TIMESTRLEN 15
-#define PACKETLEN 777
-#define MAXPAYLOADLEN 771 /* This is the size of 3 strings + taglen */
-#define SYSID 0
-#define CURRVER 2
-#define U8ENCODELEN 3
-#define SYS_SUCCESS_LEN 3
-#define ACC_LOGIN_SUCCESS_LEN 4
-#define UNRECOGNIZEDTAGTYPE -1
-#define INVALIDINTEGERLENGTH -2
-#define FIELDLENGTHOFZERO -3
-#define UNRECOGNIZEDPACKETTYPE -4
-#define UNSUPPORTEDVERSION -5
-#define EXCEEDMAXPAYLOAD -6
+#define HEADERLEN (6)
+#define TIMESTRLEN (15)
+#define PACKETLEN (777)
+#define MAXPAYLOADLEN (771) /* This is the size of 3 strings + taglen */
+#define SYSID (0)
+#define CURRVER (2)
+#define U8ENCODELEN (3)
+#define SYS_SUCCESS_LEN (3)
+#define ACC_LOGIN_SUCCESS_LEN (4)
+#define UNRECOGNIZEDTAGTYPE (-1)
+#define INVALIDINTEGERLENGTH (-2)
+#define FIELDLENGTHOFZERO (-3)
+#define UNRECOGNIZEDPACKETTYPE (-4)
+#define UNSUPPORTEDVERSION (-5)
+#define EXCEEDMAXPAYLOAD (-6)
 
 enum ASNTag
 {

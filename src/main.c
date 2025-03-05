@@ -18,6 +18,7 @@ static int  process_req(int cfd);
 static void send_sys_success(uint8_t buf[], int fd, uint8_t packet_type);
 static void send_sys_error(uint8_t buf[], int fd, int err);
 static void send_acc_login_success(uint8_t buf[], int fd, uint16_t user_id);
+static void send_cht_send(uint8_t buf[], int fd);
 
 static volatile sig_atomic_t server_running;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 

@@ -13,13 +13,10 @@ static int  decode_time(const uint8_t buf[], int pos);
 static int  check_header(const header_t *header);
 static void print_header(const header_t *header);
 static int  decode_field(const uint8_t buf[], int pos);
-static int  encode_uint8(uint8_t buf[], uint8_t i, int pos, const int asntype);
-static int  encode_uint16(uint8_t buf[], uint16_t i, int pos, const int asntype);
-static int  encode_str(uint8_t buf[], const char *str, int pos, const int asntype);
+static int  encode_uint8(uint8_t buf[], uint8_t i, int pos, int asntype);
+static int  encode_uint16(uint8_t buf[], uint16_t i, int pos, int asntype);
+static int  encode_str(uint8_t buf[], const char *str, int pos, int asntype);
 static void encode_header(uint8_t buf[], const header_t *header);
-static int  encode_sys_error_res(uint8_t buf[], int err);
-static int  encode_acc_login_success_res(uint8_t buf[], uint16_t user_id);
-static int  encode_cht_send(uint8_t buf[]);
 
 /*
  * Errors
@@ -227,7 +224,7 @@ int decode_packet(const uint8_t buf[], const header_t *header)
     return 0;
 }
 
-static int encode_uint8(uint8_t buf[], uint8_t i, int pos, const int asntype)
+static int encode_uint8(uint8_t buf[], uint8_t i, int pos, int asntype)
 {
     buf[pos++] = (uint8_t)asntype;
     buf[pos++] = 1;
@@ -235,7 +232,7 @@ static int encode_uint8(uint8_t buf[], uint8_t i, int pos, const int asntype)
     return pos;
 }
 
-static int encode_uint16(uint8_t buf[], uint16_t i, int pos, const int asntype)
+static int encode_uint16(uint8_t buf[], uint16_t i, int pos, int asntype)
 {
     uint16_t copy = htons(i);
     size_t   len  = sizeof(uint16_t);
@@ -246,7 +243,7 @@ static int encode_uint16(uint8_t buf[], uint16_t i, int pos, const int asntype)
 }
 
 /* returns new position */
-static int encode_str(uint8_t buf[], const char *str, int pos, const int asntype)
+static int encode_str(uint8_t buf[], const char *str, int pos, int asntype)
 {
     size_t len = strlen(str);
     buf[pos++] = (uint8_t)asntype;
