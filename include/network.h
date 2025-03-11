@@ -5,8 +5,8 @@
 #include "../include/message.h"
 #include "../include/user_db.h"
 
-int server_tcp_setup(const Arguments *args);
-int client_tcp_setup(const Arguments *args);
+int server_tcp(const Arguments *args);
+int server_manager_tcp(const Arguments *args);
 
 int       socket_accept(int server_fd, struct sockaddr_storage *client_addr, socklen_t *client_addr_len);
 in_port_t convert_port(const char *binary_name, const char *str);

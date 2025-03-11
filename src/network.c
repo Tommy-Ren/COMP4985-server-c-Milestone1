@@ -4,6 +4,7 @@
 #include "../include/user_db.h"
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -15,14 +16,14 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const Arguments *args, int *err);
-static void sm_socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const Arguments *args, int *err);
+static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const Arguments *args);
 static int  socket_create(int domain, int type, int protocol);
-static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t port);
-static void start_listen(int server_fd, int backlog);
+static int  socket_set(int sockfd);
+static int  socket_bind(int sockfd, struct sockaddr_storage *addr, socklen_t addr_len);
+static int  socket_listen(int server_fd, int backlog);
+static int  socket_connect(int sockfd, struct sockaddr_storage *addr, socklen_t addr_len);
 
 #define BASE_TEN 10
-
 #define ERR_NONE (0)
 #define ERR_SOCKET (-1)
 #define ERR_SET_OPTION (-2)
@@ -35,34 +36,31 @@ static void start_listen(int server_fd, int backlog);
  * Description: Sets up a TCP server using the provided arguments.
  * Returns: The server socket descriptor on success or an error code on failure.
  */
-int server_tcp_setup(const Arguments *args)
+int server_tcp(const Arguments *args)
 {
-    int                     err;
     int                     sockfd;
     struct sockaddr_storage addr;
     socklen_t               addr_len;
 
     addr_len = 0;
-    err      = ERR_NONE;
+    sockfd   = ERR_NONE;
 
     memset(&addr, 0, sizeof(struct sockaddr_storage));
 
     /* Set up the address structure */
-    socket_setup(&addr, &addr_len, args, &err);
+    socket_setup(&addr, &addr_len, args);
 
     /* Create the socket */
     sockfd = socket_create(addr.ss_family, SOCK_STREAM, 0);
     if(sockfd < 0)
     {
-        errno = err;
         perror("Failed to create socket");
         sockfd = ERR_SOCKET;
         goto exit;
     }
 
     /* Set socket options */
-    errno = 0;
-    if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0)
+    if(socket_set(sockfd) < 0)
     {
         perror("Failed to set socket options");
         sockfd = ERR_SET_OPTION;
@@ -70,73 +68,83 @@ int server_tcp_setup(const Arguments *args)
     }
 
     /* Bind the socket */
-    socket_bind(sockfd, &addr, args->port);
-    if(sockfd < 0)
+    if(socket_bind(sockfd, &addr, addr_len) < 0)
     {
         perror("Failed to bind socket");
         sockfd = ERR_BIND;
         goto exit;
     }
+    printf("Bound to socket: %s:%u\n", args->ip, args->port);
 
     /* Start listening */
-    start_listen(sockfd, SOMAXCONN);
-    if(listen(sockfd, SOMAXCONN) < 0)
+    if(start_listen(sockfd, SOMAXCONN) < 0)
     {
-        perror("Failed to start listening");
+        perror("Failed to listen on socket");
         close(sockfd);
         sockfd = ERR_LISTEN;
         goto exit;
     }
+    printf("Listening on %s:%u\n", args->ip, args->port);
 
 exit:
     return sockfd;
 }
 
-int client_tcp_setup(const Arguments *args)
+/*
+ * Function: server_manager_tcp
+ * Description: Connects to the server manager using the provided arguments.
+ * Returns: The server manager socket descriptor on success or an error code on failure.
+ */
+int server_manager_tcp(const Arguments *args)
 {
-    int                     err;
     int                     sm_fd;
     struct sockaddr_storage addr;
     socklen_t               addr_len;
 
     addr_len = 0;
-    err      = ERR_NONE;
+    sm_fd    = ERR_NONE;
 
     memset(&addr, 0, sizeof(struct sockaddr_storage));
 
     /* Set up the address structure */
-    sm_socket_setup(&addr, &addr_len, args, &err);
+    socket_setup(&addr, &addr_len, args);
 
     /* Create the socket */
     sm_fd = socket_create(addr.ss_family, SOCK_STREAM, 0);
     if(sm_fd < 0)
     {
-        errno = err;
-        perror("Failed to create socket to server manager");
+        perror("Failed to create socket");
         sm_fd = ERR_SOCKET;
         goto exit;
     }
 
     /* Set socket options */
-    errno = 0;
-    if(connect(sm_fd, (struct sockaddr *)&addr, addr_len) < 0)
+    if(socket_set(sm_fd) < 0)
+    {
+        perror("Failed to set socket options");
+        sm_fd = ERR_SET_OPTION;
+        goto exit;
+    }
+
+    /* Connect to the server manager */
+    if(socket_connect(sm_fd, &addr, addr_len) < 0)
     {
         perror("Failed to connect to server manager");
         sm_fd = ERR_CONNECT;
         goto exit;
     }
+    printf("Connected to server manager at %s:%u\n", args->sm_ip, args->sm_port);
 
 exit:
     return sm_fd;
 }
 
 /* Set up address structure */
-static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const Arguments *args, int *err)
+static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const Arguments *args)
 {
     in_port_t net_port;
     net_port = htons(args->port);
     memset(addr, 0, sizeof(struct sockaddr_storage));
-    *err = 0;
 
     /* Try to interpret the address as IPv4 */
     if(inet_pton(AF_INET, args->ip, &((struct sockaddr_in *)addr)->sin_addr) == 1)
@@ -164,44 +172,7 @@ static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, con
     else
     {
         fprintf(stderr, "%s is not a valid IPv4 or IPv6 address\n", args->ip);
-        *err = errno;
-    }
-}
-
-static void sm_socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const Arguments *args, int *err)
-{
-    in_port_t net_port;
-    net_port = htons(args->sm_port);
-    memset(addr, 0, sizeof(struct sockaddr_storage));
-    *err = 0;
-
-    /* Try to interpret the address as IPv4 */
-    if(inet_pton(AF_INET, args->sm_ip, &((struct sockaddr_in *)addr)->sin_addr) == 1)
-    {
-        {
-            struct sockaddr_in *ipv4_addr;
-            ipv4_addr             = (struct sockaddr_in *)addr;
-            ipv4_addr->sin_family = AF_INET;
-            ipv4_addr->sin_port   = net_port;
-            *addr_len             = sizeof(struct sockaddr_in);
-        }
-    }
-    /* If IPv4 fails, try interpreting it as IPv6 */
-    else if(inet_pton(AF_INET6, args->sm_ip, &((struct sockaddr_in6 *)addr)->sin6_addr) == 1)
-    {
-        {
-            struct sockaddr_in6 *ipv6_addr;
-            ipv6_addr              = (struct sockaddr_in6 *)addr;
-            ipv6_addr->sin6_family = AF_INET6;
-            ipv6_addr->sin6_port   = net_port;
-            *addr_len              = sizeof(struct sockaddr_in6);
-        }
-    }
-    /* If neither IPv4 nor IPv6, set an error */
-    else
-    {
-        fprintf(stderr, "%s is not a valid IPv4 or IPv6 address\n", args->sm_ip);
-        *err = errno;
+        exit(EXIT_FAILURE);
     }
 }
 
@@ -218,64 +189,51 @@ static int socket_create(int domain, int type, int protocol)
     return sockfd;
 }
 
-/* Bind the socket to an address */
-static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t port)
+/* Set socket options */
+static int socket_set(int sockfd)
 {
-    char      addr_str[INET6_ADDRSTRLEN];
-    socklen_t addr_len;
-    void     *vaddr;
-    in_port_t net_port;
-
-    net_port = htons(port);
-
-    if(addr->ss_family == AF_INET)
+    // Get the current flags
+    int flag = fcntl(socket, F_GETFL, 0);
+    if(flag == -1)
     {
-        struct sockaddr_in *ipv4_addr;
-        ipv4_addr           = (struct sockaddr_in *)addr;
-        addr_len            = sizeof(*ipv4_addr);
-        ipv4_addr->sin_port = net_port;
-        vaddr               = (void *)&(((struct sockaddr_in *)addr)->sin_addr);
-    }
-    else if(addr->ss_family == AF_INET6)
-    {
-        struct sockaddr_in6 *ipv6_addr;
-        ipv6_addr            = (struct sockaddr_in6 *)addr;
-        addr_len             = sizeof(*ipv6_addr);
-        ipv6_addr->sin6_port = net_port;
-        vaddr                = (void *)&(((struct sockaddr_in6 *)addr)->sin6_addr);
-    }
-    else
-    {
-        fprintf(stderr, "Internal error: addr->ss_family must be AF_INET or AF_INET6, was: %d\n", addr->ss_family);
-        exit(EXIT_FAILURE);
+        perror("Failed to get flag");
+        return -1;
     }
 
-    if(inet_ntop(addr->ss_family, vaddr, addr_str, sizeof(addr_str)) == NULL)
+    // Set the socket to non-blocking
+    flag |= O_NONBLOCK;
+    if(fcntl(socket, F_SETFL, flag) == -1)
     {
-        perror("inet_ntop");
-        exit(EXIT_FAILURE);
+        perror("Failed to set flag");
+        return -1;
     }
 
-    if(bind(sockfd, (struct sockaddr *)addr, addr_len) == -1)
+    // Set the socket to reuse the address
+    if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0)
     {
-        perror("Binding failed");
-        fprintf(stderr, "Error code: %d\n", errno);
-        exit(EXIT_FAILURE);
+        perror("Failed to set socket options");
+        return -1;
     }
+}
 
-    printf("Bound to socket: %s:%u\n", addr_str, port);
+/* Bind the socket to an address */
+static int socket_bind(int sockfd, struct sockaddr_storage *addr, socklen_t addr_len)
+{
+    int ret = bind(sockfd, (struct sockaddr *)addr, addr_len);
+    return ret;
 }
 
 /* Start listening on the socket */
-static void start_listen(int server_fd, int backlog)
+static int socket_listen(int server_fd, int backlog)
 {
-    if(listen(server_fd, backlog) == -1)
-    {
-        perror("listen failed");
-        close(server_fd);
-        exit(EXIT_FAILURE);
-    }
-    printf("Listening for incoming connections...\n");
+    int ret = listen(server_fd, backlog);
+    return ret;
+}
+
+static int socket_connect(int sockfd, struct sockaddr_storage *addr, socklen_t addr_len)
+{
+    int ret = connect(sockfd, (struct sockaddr *)addr, addr_len);
+    return ret;
 }
 
 /* Accept a client connection */
@@ -285,14 +243,10 @@ int socket_accept(int server_fd, struct sockaddr_storage *client_addr, socklen_t
     char client_host[NI_MAXHOST];
     char client_service[NI_MAXSERV];
 
-    errno     = 0;
     client_fd = accept(server_fd, (struct sockaddr *)client_addr, client_addr_len);
     if(client_fd == -1)
     {
-        if(errno != EINTR)
-        {
-            perror("Failed to accept client connection");
-        }
+        perror("Failed to accept client connection");
         return -1;
     }
 
@@ -330,7 +284,6 @@ in_port_t convert_port(const char *binary_name, const char *str)
     char     *endptr;
     uintmax_t parsed_value;
 
-    errno        = 0;
     parsed_value = strtoumax(str, &endptr, BASE_TEN);
     if(errno != 0)
     {

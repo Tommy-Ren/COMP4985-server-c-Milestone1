@@ -5,7 +5,19 @@
 #ifndef USER_DB_H
 #define USER_DB_H
 
+#include <gdbm.h>
 #include <stddef.h>
+#ifdef __APPLE__
+    #include <ndbm.h>
+typedef size_t datum_size;
+#elif defined(__FreeBSD__)
+    #include <gdbm.h>
+typedef int datum_size;
+#else
+    /* Assume Linux/Ubuntu; using gdbm_compat which provides an ndbm-like interface */
+    #include <ndbm.h>
+typedef int datum_size;
+#endif
 
 #define MAX_USERS 100    // Define a reasonable max number of users
 

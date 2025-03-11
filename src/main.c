@@ -1,5 +1,4 @@
 #include "../include/args.h"
-#include "../include/asn.h"
 #include "../include/network.h"
 #include "../include/user_db.h"    // Include user database header
 #include <errno.h>
@@ -38,18 +37,18 @@ int main(int argc, char *argv[])
 
     retval = EXIT_SUCCESS;
 
-    sockfd = server_tcp_setup(&args);
+    sockfd = server_tcp(&args);
     if(sockfd < 0)
     {
-        perror("Failed to create server network");
+        perror("Failed to create server network.\n");
         retval = EXIT_FAILURE;
         goto exit;
     }
 
-    sm_fd = client_tcp_setup(&args);
+    sm_fd = server_manager_tcp(&args);
     // if(sm_fd < 0)
     // {
-    //     perror("Failed to create server manager network");
+    //     perror("Failed to connect to server manager\n");
     //     retval = EXIT_FAILURE;
     //     goto exit;
     // }

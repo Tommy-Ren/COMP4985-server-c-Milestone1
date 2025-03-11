@@ -8,6 +8,7 @@
 #define HEADERLEN (6)
 #define TIMESTRLEN (15)
 #define PACKETLEN (777)
+#define MAXPAYLOADLEN (771)
 #define SYSID (0)
 #define VERSION_NUM (2)    // Updated to Protocol Version 2
 #define U8ENCODELEN (3)

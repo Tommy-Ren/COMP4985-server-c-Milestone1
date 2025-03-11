@@ -31,18 +31,6 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#ifdef __APPLE__
-    #include <ndbm.h>
-typedef size_t datum_size;
-#elif defined(__FreeBSD__)
-    #include <gdbm.h>
-typedef int datum_size;
-#else
-    /* Assume Linux/Ubuntu; using gdbm_compat which provides an ndbm-like interface */
-    #include <ndbm.h>
-typedef int datum_size;
-#endif
-
 /* Named constants */
 #define USER_DB_MODE 0644
 #define KEY_STR_SIZE 16
