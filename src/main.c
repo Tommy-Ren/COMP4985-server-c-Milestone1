@@ -11,11 +11,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-static void setup_signal_handler(void);
-static void sigint_handler(int signum);
-
-static volatile sig_atomic_t server_running;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
-
 int main(int argc, char *argv[])
 {
     Arguments args;
@@ -56,56 +51,12 @@ int main(int argc, char *argv[])
     printf("Connecting to server manager at %s:%d\n", args.sm_ip, args.sm_port);
 
     setup_signal_handler();
-    server_running = 1;
 
-    while(server_running)
-    {
-        int                     client_fd;
-        struct sockaddr_storage client_addr;
-        socklen_t               client_addr_len;
+    // Connect to server manager
+    // handle_sm(sm_fd, sockfd);
 
-        client_addr_len = sizeof(struct sockaddr_storage);
-        memset(&client_addr, 0, client_addr_len);
-
-        client_fd = socket_accept(sockfd, &client_addr, &client_addr_len);
-        if(client_fd < 0)
-        {
-            if(!server_running)
-            {
-                break;
-            }
-            continue;
-        }
-
-        // Fork the process
-        pid = fork();
-        if(pid < 0)
-        {
-            perror("Fail to fork");
-            remove_user(client_fd);    // Remove user on fork failure
-            close(client_fd);
-            continue;
-        }
-
-        if(pid == 0)    // Child process
-        {
-            char buffer[1];
-            process_req(client_fd);
-
-            // Wait for client to disconnect before cleanup
-            while(recv(client_fd, buffer, sizeof(buffer), 0) > 0)
-            {
-                // Keep reading until the client disconnects
-            }
-
-            printf("Client %d disconnected, removing from list.\n", client_fd);
-            remove_user(client_fd);
-            close(client_fd);
-            goto exit;
-        }
-
-        close(client_fd);
-    }
+    // Handle client connections
+    handle_clients(sockfd);
 
 exit:
     close(sm_fd);

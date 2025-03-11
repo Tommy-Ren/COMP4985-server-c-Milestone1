@@ -54,15 +54,17 @@ static char user_db_filename[] = "user_db";    // NOLINT(cppcoreguidelines-avoid
    Description: Initializes the DBM database for user management.
                 Opens the database for reading and writing; creates it if it does not exist.
    Returns: void */
-void init_user_list(void)
+int init_user_list(void)
 {
     user_db = dbm_open((char *)user_db_filename, O_RDWR | O_CREAT, USER_DB_MODE);
     if(user_db == NULL)
     {
         perror("Failed to open DBM database");
         exit(EXIT_FAILURE);
+        return -1;
     }
     printf("DBM database '%s' opened successfully.\n", user_db_filename);
+    return 0;
 }
 
 /* Function: new_user

@@ -5,12 +5,15 @@
 #include <netinet/in.h>
 #include <stdint.h>
 
+#define SYSID (0)
+#define VERSION_NUM (2)    // Updated to Protocol Version 2
+
+#define MAX_FDS (5)
+
 #define HEADERLEN (6)
 #define TIMESTRLEN (15)
 #define PACKETLEN (777)
 #define MAXPAYLOADLEN (771)
-#define SYSID (0)
-#define VERSION_NUM (2)    // Updated to Protocol Version 2
 #define U8ENCODELEN (3)
 #define SYS_SUCCESS_LEN (3)
 #define ACC_LOGIN_SUCCESS_LEN (4)
@@ -134,7 +137,7 @@ typedef struct
 {
     error_code_t code;
     const char  *msg;
-} codeMapping;
+} error_code_map;
 
 typedef struct user_count_t
 {
@@ -146,16 +149,7 @@ typedef struct user_count_t
     uint16_t value;
 } user_count_t;
 
-static const codeMapping code_map[] = {
-    {EC_GOOD,          ""                      },
-    {EC_INV_USER_ID,   "Invalid User ID"       },
-    {EC_INV_AUTH_INFO, "Invalid Authentication"},
-    {EC_USER_EXISTS,   "User Already exist"    },
-    {EC_SERVER,        "Server Error"          },
-    {EC_INV_REQ,       "Invalid Request"       },
-    {EC_REQ_TIMEOUT,   "Request Timeout"       }
-};
-
+void handle_clients(int server_fd);
 void process_req(int client_fd);
 
 #endif

@@ -1,11 +1,13 @@
 #include "../include/message.h"
 #include "../include/account.h"
+#include "../include/user_db.h"
+#include "../include/utils.h"
+#include <poll.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#define BER_MAX_PAYLOAD_SIZE 1024
 
 static ssize_t     read_packet(int fd, uint8_t **buf, request_t *request, response_t *response);
 static ssize_t     create_response(const request_t *request, response_t *response, uint8_t **buf, size_t *response_len);
@@ -14,7 +16,103 @@ static ssize_t     decode_header(header_t *header, response_t *response, const u
 static ssize_t     decode_payload(request_t *request, response_t *response, const uint8_t *buf, ssize_t nread);
 static ssize_t     encode_header(const response_t *response, uint8_t *buf);
 static ssize_t     encode_body(const response_t *response, uint8_t *buf);
-static const char *code_to_string(const error_code_t *code);
+static const char *error_code_to_string(const error_code_t *code);
+
+static const error_code_map code_map[] = {
+    {EC_GOOD,          ""                      },
+    {EC_INV_USER_ID,   "Invalid User ID"       },
+    {EC_INV_AUTH_INFO, "Invalid Authentication"},
+    {EC_USER_EXISTS,   "User Already Exist"    },
+    {EC_SERVER,        "Server Error"          },
+    {EC_INV_REQ,       "Invalid Request"       },
+    {EC_REQ_TIMEOUT,   "Request Timeout"       }
+};
+
+void handle_clients(int server_fd)
+{
+    struct pollfd fds[MAX_FDS];
+    int           current_size;
+    int           nfds;
+    int           server_running = 1;
+
+    if(init_user_list() < 0)
+    {
+        goto exit;
+    }
+
+    memset(fds, 0, sizeof(fds));
+    fds[0].fd     = server_fd;
+    fds[0].events = POLLIN;
+
+    while(server_running)
+    {
+        int poll_count = poll(fds, nfds, -1);
+        if(poll_count < 0)
+        {
+            perror("poll error");
+            break;
+        }
+
+        current_size = nfds;
+        for(int i = 0; i < current_size; i++)
+        {
+            if(fds[i].revents == 0)
+                continue;
+
+            if(fds[i].revents != POLLIN)
+            {
+                printf("Error! revents = %d\n", fds[i].revents);
+                server_running = 0;
+                break;
+            }
+
+            if(fds[i].fd == server_fd)
+            {
+                int                     client_fd;
+                struct sockaddr_storage client_addr;
+                socklen_t               client_addr_len = sizeof(client_addr);
+
+                client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
+                if(client_fd < 0)
+                {
+                    perror("accept error");
+                    server_running = 0;
+                    break;
+                }
+
+                printf("New incoming connection on fd %d\n", client_fd);
+                fds[nfds].fd     = client_fd;
+                fds[nfds].events = POLLIN;
+                nfds++;
+            }
+            else
+            {
+                int client_fd = fds[i].fd;
+                if(process_req(client_fd) < 0)
+                {
+                    close(client_fd);
+                    fds[i].fd = -1;
+                }
+            }
+        }
+
+        for(int i = 0; i < nfds; i++)
+        {
+            if(fds[i].fd == -1)
+            {
+                for(int j = i; j < nfds - 1; j++)
+                {
+                    fds[j].fd = fds[j + 1].fd;
+                }
+                nfds--;
+                i--;
+            }
+        }
+    }
+
+exit:
+    dbm_close(user_db);
+}
 
 int process_req(int client_fd)
 {
@@ -191,7 +289,7 @@ static ssize_t create_response(const request_t *request, response_t *response, u
         return -1;
     }
 
-    msg = code_to_string(response->code);
+    msg = error_code_to_string(response->code);
 
     // tag
     response->body->msg_tag = (uint8_t)BER_STR;
@@ -432,7 +530,7 @@ static ssize_t encode_body(const response_t *response, uint8_t *buf)
         memcpy(buf + pos, &response->body->msg_len, sizeof(response->body->msg_len));
         pos += sizeof(response->body->msg_len);
 
-        memcpy(buf + pos, code_to_string(response->code), response->header->payload_len - pos);
+        memcpy(buf + pos, error_code_to_string(response->code), response->header->payload_len - pos);
     }
 
     return 0;
@@ -452,7 +550,7 @@ static ssize_t sent_response(int fd, const uint8_t *buf, const size_t *response_
     return 0;
 }
 
-static const char *code_to_string(const error_code_t *code)
+static const char *error_code_to_string(const error_code_t *code)
 {
     for(size_t i = 0; i < sizeof(code_map) / sizeof(code_map[0]); i++)
     {
