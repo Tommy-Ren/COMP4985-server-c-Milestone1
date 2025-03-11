@@ -1,6 +1,7 @@
 #ifndef message_h
 #define message_h
 
+#include "../include/user_db.h"
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdint.h>
@@ -9,6 +10,7 @@
 #define VERSION_NUM (2)    // Updated to Protocol Version 2
 
 #define MAX_FDS (5)
+#define TIMEOUT (3000)
 
 #define HEADERLEN (6)
 #define TIMESTRLEN (15)

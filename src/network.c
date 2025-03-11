@@ -21,7 +21,6 @@ static int  socket_create(int domain, int type, int protocol);
 static int  socket_set(int sockfd);
 static int  socket_bind(int sockfd, struct sockaddr_storage *addr, socklen_t addr_len);
 static int  socket_listen(int server_fd, int backlog);
-static int  socket_accept(int server_fd, struct sockaddr_storage *client_addr, socklen_t *client_addr_len);
 static int  socket_connect(int sockfd, struct sockaddr_storage *addr, socklen_t addr_len);
 
 #define BASE_TEN 10
@@ -240,38 +239,11 @@ static int socket_connect(int sockfd, struct sockaddr_storage *addr, socklen_t a
 /* Accept a client connection */
 int socket_accept(int server_fd, struct sockaddr_storage *client_addr, socklen_t *client_addr_len)
 {
-    int  client_fd;
-    char client_host[NI_MAXHOST];
-    char client_service[NI_MAXSERV];
-
+    int client_fd;
     client_fd = accept(server_fd, (struct sockaddr *)client_addr, client_addr_len);
-    if(client_fd == -1)
+    if(client_fd < 0)
     {
-        perror("Failed to accept client connection");
         return -1;
-    }
-
-    if(getnameinfo((struct sockaddr *)client_addr, *client_addr_len, client_host, NI_MAXHOST, client_service, NI_MAXSERV, 0) == 0)
-    {
-        user_obj *user;
-        printf("Accepted a new connection from %s:%s\n", client_host, client_service);
-        user = new_user();
-        if(!user)
-        {
-            close(client_fd);
-            return -1;
-        }
-        user->id = client_fd; /* Assign socket FD as user ID for now */
-        if(add_user(user) == -1)
-        {
-            free(user);
-            close(client_fd);
-            return -1;
-        }
-    }
-    else
-    {
-        printf("Unable to get client information\n");
     }
     return client_fd;
 }

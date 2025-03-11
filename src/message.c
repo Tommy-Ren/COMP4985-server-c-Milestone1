@@ -1,7 +1,8 @@
 #include "../include/message.h"
 #include "../include/account.h"
-#include "../include/user_db.h"
+#include "../include/network.h"
 #include "../include/utils.h"
+#include <errno.h>
 #include <poll.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -31,81 +32,96 @@ static const error_code_map code_map[] = {
 void handle_clients(int server_fd)
 {
     struct pollfd fds[MAX_FDS];
-    int           current_size;
-    int           nfds;
     int           server_running = 1;
+    int           poll_count;
 
+    // Initialize user DB
     if(init_user_list() < 0)
     {
+        perror("init_user_list error\n");
         goto exit;
     }
 
+    // Initialize pollfd structure
     memset(fds, 0, sizeof(fds));
     fds[0].fd     = server_fd;
     fds[0].events = POLLIN;
+    for(int i = 1; i < MAX_FDS; i++)
+    {
+        fds[i].fd = -1;
+    }
 
     while(server_running)
     {
-        int poll_count = poll(fds, nfds, -1);
+        errno      = 0;
+        poll_count = poll(fds, MAX_FDS, TIMEOUT);
+
         if(poll_count < 0)
         {
-            perror("poll error");
-            break;
+            perror("poll error\n");
+            goto exit;
         }
 
-        current_size = nfds;
-        for(int i = 0; i < current_size; i++)
+        if(poll_count == 0)
         {
-            if(fds[i].revents == 0)
-                continue;
+            printf("poll timeout\n");
+            continue;
+        }
 
-            if(fds[i].revents != POLLIN)
+        if(fds[0].revents & POLLIN)
+        {
+            int client_added;
+
+            int                     client_fd;
+            struct sockaddr_storage client_addr;
+            socklen_t               client_addr_len = sizeof(client_addr);
+
+            client_added = 0;
+
+            client_fd = socket_accept(server_fd, &client_addr, &client_addr_len);
+            if(client_fd < 0)
             {
-                printf("Error! revents = %d\n", fds[i].revents);
-                server_running = 0;
-                break;
+                if(errno == EINTR)
+                {
+                    server_running = 0;
+                    goto exit;
+                }
+                perror("accept error\n");
+                continue;
             }
 
-            if(fds[i].fd == server_fd)
+            for(int i = 1; i < MAX_FDS; i++)
             {
-                int                     client_fd;
-                struct sockaddr_storage client_addr;
-                socklen_t               client_addr_len = sizeof(client_addr);
-
-                client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
-                if(client_fd < 0)
+                if(fds[i].fd == -1)
                 {
-                    perror("accept error");
-                    server_running = 0;
+                    fds[i].fd     = client_fd;
+                    fds[i].events = POLLIN;
+                    client_added  = 1;
                     break;
                 }
-
-                printf("New incoming connection on fd %d\n", client_fd);
-                fds[nfds].fd     = client_fd;
-                fds[nfds].events = POLLIN;
-                nfds++;
             }
-            else
+            if(!client_added)
             {
-                int client_fd = fds[i].fd;
-                if(process_req(client_fd) < 0)
-                {
-                    close(client_fd);
-                    fds[i].fd = -1;
-                }
+                printf("Too many clients connected. Rejecting connection.\n");
+                close(client_fd);
+                continue;
             }
         }
 
-        for(int i = 0; i < nfds; i++)
+        for(int i = 1; i < MAX_FDS; i++)
         {
             if(fds[i].fd == -1)
             {
-                for(int j = i; j < nfds - 1; j++)
+                continue;
+            }
+
+            if(fds[i].revents & (POLLIN | POLLERR))
+            {
+                if(process_req(fds[i].fd) < 0)
                 {
-                    fds[j].fd = fds[j + 1].fd;
+                    close(fds[i].fd);
+                    fds[i].fd = -1;
                 }
-                nfds--;
-                i--;
             }
         }
     }
