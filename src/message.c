@@ -198,26 +198,6 @@ exit:
     return retval;
 }
 
-static void send_sys_success(uint8_t buf[], int fd, uint8_t packet_type)
-{
-    int len = encode_sys_success_res(buf, packet_type);
-    write(fd, buf, (size_t)len);
-}
-
-static void send_sys_error(uint8_t buf[], int fd, int err)
-{
-    int len = encode_sys_error_res(buf, err);
-    write(fd, buf, (size_t)len);
-}
-
-static void send_acc_login_success(uint8_t buf[], int fd, uint16_t user_id)
-{
-    int len = encode_acc_login_success_res(buf, user_id);
-    write(fd, buf, (size_t)len);
-}
-
-#pragma GCC diagnostic pop
-
 // BER Decoder function
 static ssize_t read_packet(int fd, uint8_t **buf, request_t *request, response_t *response)
 {

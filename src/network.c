@@ -21,6 +21,7 @@ static int  socket_create(int domain, int type, int protocol);
 static int  socket_set(int sockfd);
 static int  socket_bind(int sockfd, struct sockaddr_storage *addr, socklen_t addr_len);
 static int  socket_listen(int server_fd, int backlog);
+static int  socket_accept(int server_fd, struct sockaddr_storage *client_addr, socklen_t *client_addr_len);
 static int  socket_connect(int sockfd, struct sockaddr_storage *addr, socklen_t addr_len);
 
 #define BASE_TEN 10
