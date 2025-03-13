@@ -1,6 +1,7 @@
 #include "../include/message.h"
 #include "../include/account.h"
 #include "../include/network.h"
+#include "../include/user_db.h"
 #include "../include/utils.h"
 #include <errno.h>
 #include <poll.h>
@@ -10,6 +11,7 @@
 #include <string.h>
 #include <unistd.h>
 
+/* Declaration for static functions */
 static ssize_t     read_packet(int fd, uint8_t **buf, request_t *request, response_t *response);
 static ssize_t     create_response(const request_t *request, response_t *response, uint8_t **buf, size_t *response_len);
 static ssize_t     sent_response(int fd, const uint8_t *buf, const size_t *response_len);
@@ -19,6 +21,7 @@ static ssize_t     encode_header(const response_t *response, uint8_t *buf);
 static ssize_t     encode_body(const response_t *response, uint8_t *buf);
 static const char *error_code_to_string(const error_code_t *code);
 
+/* Error code map */
 static const error_code_map code_map[] = {
     {EC_GOOD,          ""                      },
     {EC_INV_USER_ID,   "Invalid User ID"       },
@@ -32,25 +35,28 @@ static const error_code_map code_map[] = {
 void handle_clients(int server_fd)
 {
     struct pollfd fds[MAX_FDS];
-    int           server_running = 1;
-    int           poll_count;
+    /* Use the global server_running variable declared in utils.h */
+    /* volatile sig_atomic_t server_running is already defined externally */
+    int poll_count;
+    int i;
 
-    // Initialize user DB
+    /* Initialize user DB */
     if(init_user_list() < 0)
     {
-        perror("init_user_list error\n");
+        perror("init_user_list error");
         goto exit;
     }
 
-    // Initialize pollfd structure
+    /* Initialize pollfd structure */
     memset(fds, 0, sizeof(fds));
     fds[0].fd     = server_fd;
     fds[0].events = POLLIN;
-    for(int i = 1; i < MAX_FDS; i++)
+    for(i = 1; i < MAX_FDS; i++)
     {
         fds[i].fd = -1;
     }
 
+    /* Global server_running will be used here */
     while(server_running)
     {
         errno      = 0;
@@ -58,7 +64,7 @@ void handle_clients(int server_fd)
 
         if(poll_count < 0)
         {
-            perror("poll error\n");
+            perror("poll error");
             goto exit;
         }
 
@@ -70,8 +76,7 @@ void handle_clients(int server_fd)
 
         if(fds[0].revents & POLLIN)
         {
-            int client_added;
-
+            int                     client_added;
             int                     client_fd;
             struct sockaddr_storage client_addr;
             socklen_t               client_addr_len = sizeof(client_addr);
@@ -86,11 +91,11 @@ void handle_clients(int server_fd)
                     server_running = 0;
                     goto exit;
                 }
-                perror("accept error\n");
+                perror("accept error");
                 continue;
             }
 
-            for(int i = 1; i < MAX_FDS; i++)
+            for(i = 1; i < MAX_FDS; i++)
             {
                 if(fds[i].fd == -1)
                 {
@@ -108,7 +113,7 @@ void handle_clients(int server_fd)
             }
         }
 
-        for(int i = 1; i < MAX_FDS; i++)
+        for(i = 1; i < MAX_FDS; i++)
         {
             if(fds[i].fd == -1)
             {
@@ -127,7 +132,8 @@ void handle_clients(int server_fd)
     }
 
 exit:
-    dbm_close(user_db);
+    /* Use the close_user_list() function to close the user database */
+    close_user_list();
 }
 
 int process_req(int client_fd)
@@ -137,12 +143,12 @@ int process_req(int client_fd)
     header_t     req_header;
     response_t   response;
     header_t     res_header;
-    uint8_t     *res_buf;
+    uint8_t     *res_buf = NULL;
     size_t       response_len;
-    uint8_t     *buf;
+    uint8_t     *buf = NULL;
     error_code_t code;
 
-    retval                       = EXIT_SUCCESS;
+    // retval                       = EXIT_SUCCESS;
     request.header               = &req_header;
     request.header_len           = sizeof(header_t);
     response.header              = &res_header;
@@ -150,6 +156,10 @@ int process_req(int client_fd)
     response.code                = &code;
     response_len                 = sizeof(header_t);
     code                         = EC_GOOD;
+
+    /* Initialize pointers to NULL explicitly */
+    request.body  = NULL;
+    response.body = NULL;
 
     request.body = (body_t *)malloc(sizeof(body_t));
     if(!request.body)
@@ -191,7 +201,13 @@ int process_req(int client_fd)
         goto exit;
     }
 
-    send_response(client_fd, res_buf, &response_len);
+    /* Corrected call to sent_response() */
+    if(sent_response(client_fd, res_buf, &response_len) < 0)
+    {
+        perror("Failed to send response");
+        retval = -1;
+        goto exit;
+    }
     retval = EXIT_SUCCESS;
 
 exit:
@@ -214,14 +230,13 @@ exit:
     return retval;
 }
 
-// BER Decoder function
+/* BER Decoder function */
 static ssize_t read_packet(int fd, uint8_t **buf, request_t *request, response_t *response)
 {
     size_t   header_len = request->header_len;
     uint16_t payload_len;
     ssize_t  nread;
 
-    // Read 6 bytes from fd (header should be 6 bytes)
     nread = read(fd, *buf, header_len);
     if(nread < 0)
     {
@@ -229,7 +244,6 @@ static ssize_t read_packet(int fd, uint8_t **buf, request_t *request, response_t
         *(response->code) = EC_SERVER;
         return ERROR_READ_HEADER;
     }
-    // Decode and check header completeness
     if(decode_header(request->header, response, *buf, nread) < 0)
     {
         perror("Failed to decode header");
@@ -242,7 +256,6 @@ static ssize_t read_packet(int fd, uint8_t **buf, request_t *request, response_t
         return 0;
     }
 
-    // Reallocate buffer to fit the payload
     *buf = (uint8_t *)realloc(*buf, HEADERLEN + payload_len);
     if(*buf == NULL)
     {
@@ -251,7 +264,6 @@ static ssize_t read_packet(int fd, uint8_t **buf, request_t *request, response_t
         return ERROR_REALLOCATE;
     }
 
-    // Read payload_length into buffer
     nread = read(fd, *buf + header_len, payload_len);
     if(nread < 0)
     {
@@ -287,12 +299,9 @@ static ssize_t create_response(const request_t *request, response_t *response, u
 
     msg = error_code_to_string(response->code);
 
-    // tag
     response->body->msg_tag = (uint8_t)BER_STR;
-    // len
     response->body->msg_len = (uint8_t)(strlen(msg));
     printf("msg_len: %d\n", (int)response->body->msg_len);
-    // msg
 
     *response_len = *response_len + response->body->msg_len + 2;
     printf("response_len final: %d\n", (int)*response_len);
@@ -302,7 +311,6 @@ static ssize_t create_response(const request_t *request, response_t *response, u
         response->header->type      = ACC_LOGIN_SUCCESS;
         response->header->version   = VERSION_NUM;
         response->header->sender_id = 0x00;
-        // logout has no response body
         if(request->header->type == ACC_LOGOUT)
         {
             response->header->payload_len = 0;
@@ -310,7 +318,6 @@ static ssize_t create_response(const request_t *request, response_t *response, u
         }
         else
         {
-            // no msg tag & msg len
             response->header->payload_len = (uint16_t)3;
             *response_len -= 2;
         }
@@ -318,7 +325,6 @@ static ssize_t create_response(const request_t *request, response_t *response, u
     else if(*response->code == EC_INV_AUTH_INFO)
     {
         printf("*response->code == INVALID_AUTH\n");
-
         response->header->type        = SYS_ERROR;
         response->header->version     = VERSION_NUM;
         response->header->sender_id   = 0x00;
@@ -381,7 +387,6 @@ ssize_t decode_header(header_t *header, response_t *response, const uint8_t *buf
     memcpy(&header->payload_len, buf + pos, sizeof(header->payload_len));
     header->payload_len = ntohs(header->payload_len);
 
-    // Just for debugging
     printf("Header type: %d\n", (int)header->type);
     printf("Header version: %d\n", (int)header->version);
     printf("Header sender_id: %d\n", (int)header->sender_id);
@@ -420,13 +425,11 @@ static ssize_t decode_payload(request_t *request, response_t *response, const ui
 
         printf("username tag: %d\n", (int)acc->username_tag);
 
-        // Decode username length
         memcpy(&acc->username_len, buf + pos, sizeof(acc->username_len));
         pos += sizeof(acc->username_len);
 
         printf("username len: %d\n", (int)acc->username_len);
 
-        // Decode username
         acc->username = (uint8_t *)malloc((size_t)acc->username_len + 1);
         if(!acc->username)
         {
@@ -441,19 +444,16 @@ static ssize_t decode_payload(request_t *request, response_t *response, const ui
 
         printf("username: %s\n", acc->username);
 
-        // Decode password tag
         memcpy(&acc->password_tag, buf + pos, sizeof(acc->password_tag));
         pos += sizeof(acc->password_tag);
 
         printf("password tag: %d\n", (int)acc->password_tag);
 
-        // Decode password length
         memcpy(&acc->password_len, buf + pos, sizeof(acc->password_len));
         pos += sizeof(acc->password_len);
 
         printf("password len: %d\n", (int)acc->password_len);
 
-        // Decode password
         acc->password = (uint8_t *)malloc((size_t)acc->password_len + 1);
         if(!acc->password)
         {
@@ -548,7 +548,8 @@ static ssize_t sent_response(int fd, const uint8_t *buf, const size_t *response_
 
 static const char *error_code_to_string(const error_code_t *code)
 {
-    for(size_t i = 0; i < sizeof(code_map) / sizeof(code_map[0]); i++)
+    size_t i;
+    for(i = 0; i < sizeof(code_map) / sizeof(code_map[0]); i++)
     {
         if(code_map[i].code == *code)
         {

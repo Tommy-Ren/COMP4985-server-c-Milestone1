@@ -152,6 +152,6 @@ typedef struct user_count_t
 } user_count_t;
 
 void handle_clients(int server_fd);
-void process_req(int client_fd);
+int  process_req(int client_fd);
 
 #endif
