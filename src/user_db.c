@@ -9,19 +9,19 @@
 
 #include "../include/user_db.h"
 #include <fcntl.h>
+#include <gdbm.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
 /* Named constants */
-#define USER_DB_MODE 0644
+#define USER_DB_MODE 0666
+#define DB_NAME_SIZE 32
 #define KEY_STR_SIZE 16
 
 /* Global pointer for the user list DB */
 static DBM *user_db = NULL; /* NOLINT(cppcoreguidelines-avoid-non-const-global-variables) */
-/* The filename is now a constant string */
-static char user_db_filename[] = "user_db"; /* NOLINT(cppcoreguidelines-avoid-non-const-global-variables) */
 
 /* Prototypes for externally visible functions */
 user_obj *new_user(void);
@@ -104,13 +104,19 @@ int store_string(DBM *db, char *key, char *value)
    Returns 0 on success, -1 on failure. */
 int init_user_list(void)
 {
-    user_db = dbm_open((char *)user_db_filename, O_RDWR | O_CREAT, USER_DB_MODE);
+    const char *const_db_name = "user_db";
+    // Create a mutable buffer to hold the database name.
+    char db_name[DB_NAME_SIZE];
+    strncpy(db_name, const_db_name, sizeof(db_name) - 1);
+    db_name[sizeof(db_name) - 1] = '\0';
+
+    user_db = dbm_open(db_name, O_RDWR | O_CREAT, USER_DB_MODE);
     if(user_db == NULL)
     {
-        perror("init_user_list: Failed to open DBM database");
-        exit(EXIT_FAILURE);
+        perror("Failed to open user database");
+        return -1;
     }
-    printf("DBM database '%s' opened successfully.\n", user_db_filename);
+    printf("DBM database '%s' opened successfully.\n", db_name);
     return 0;
 }
 
@@ -225,13 +231,12 @@ void list_all_users(void)
     }
 }
 
-/* Closes the user list database. */
 void close_user_list(void)
 {
-    if(user_db != NULL)
+    if(user_db)
     {
         dbm_close(user_db);
-        user_db = NULL;
         printf("DBM database closed.\n");
+        user_db = NULL;
     }
 }

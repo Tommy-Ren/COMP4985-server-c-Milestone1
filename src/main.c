@@ -1,60 +1,54 @@
+#include "../include/args.h"
 #include "../include/network.h"
-#include "../include/utils.h" /* Added to declare setup_signal_handler */
-#include <memory.h>
-#include <netinet/in.h>
+#include "../include/user_db.h"
+#include "../include/utils.h"    // Declares setup_signal_handler() and server_running
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <sys/socket.h>
 #include <unistd.h>
 
 int main(int argc, char *argv[])
 {
     Arguments args;
-    int       retval;
     int       sockfd;
-    int       sm_fd; /* Server manager file descriptor */
-    sm_fd = -1;
+    int       sm_fd;    // No initial assignment needed
+
     memset(&args, 0, sizeof(Arguments));
     args.ip   = NULL;
     args.port = 0;
 
     parse_args(argc, argv, &args);
 
-    /* Initialize user list */
+    // Initialize user list (DBM-based)
     init_user_list();
 
     printf("Listening on %s:%d\n", args.ip, args.port);
 
-    retval = EXIT_SUCCESS;
-
+    // Set up signal handler
     setup_signal_handler();
 
     sockfd = server_tcp(&args);
     if(sockfd < 0)
     {
-        perror("Failed to create server network.\n");
-        retval = EXIT_FAILURE;
-        goto exit;
+        perror("Failed to create server network.");
+        exit(EXIT_FAILURE);
     }
 
     printf("Connecting to server manager on %s:%d\n", args.sm_ip, args.sm_port);
     sm_fd = server_manager_tcp(&args);
-    /* if (sm_fd < 0)
+    if(sm_fd < 0)
     {
-        perror("Failed to connect to server manager\n");
-        retval = EXIT_FAILURE;
-        goto exit;
-    } */
+        fprintf(stderr, "Failed to connect to server manager, continuing without it.\n");
+    }
 
-    /* Connect to server manager */
-    /* handle_sm(sm_fd, sockfd); */
-
-    /* Handle client connections */
+    // handle_clients() should run its loop while server_running is true.
     handle_clients(sockfd);
 
-exit:
-    close(sm_fd);
+    // When a shutdown signal is received, handle_clients() returns.
+    if(sm_fd >= 0)
+    {
+        close(sm_fd);
+    }
     close(sockfd);
-    exit(retval);
+
+    return EXIT_SUCCESS;
 }

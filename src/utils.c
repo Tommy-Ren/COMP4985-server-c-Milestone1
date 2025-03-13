@@ -10,7 +10,7 @@ _Pragma("clang diagnostic ignored \"-Wdisabled-macro-expansion\"")
 
 #define SIG_SIZE 64
 
-    volatile sig_atomic_t server_running;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
+    volatile sig_atomic_t server_running = 1;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
 
 static void sigint_handler(int sig);
 

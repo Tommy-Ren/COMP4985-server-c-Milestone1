@@ -38,7 +38,7 @@ ssize_t account_handler(const request_t *request, response_t *response)
 ssize_t account_login(const request_t *request, response_t *response)
 {
     char            *password;
-    char             db_name[] = "mydb";
+    char             db_name[] = "user_db";
     ssize_t          result;
     DBO              dbo;
     datum            output;
@@ -97,7 +97,7 @@ error:
 
 ssize_t account_create(const request_t *request, response_t *response)
 {
-    char    db_name[] = "mydb";
+    char    db_name[] = "user_db";
     ssize_t result;
     DBO     dbo;
     char   *existing;

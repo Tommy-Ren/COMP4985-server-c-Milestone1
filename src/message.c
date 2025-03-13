@@ -534,15 +534,33 @@ static ssize_t encode_body(const response_t *response, uint8_t *buf)
 
 static ssize_t sent_response(int fd, const uint8_t *buf, const size_t *response_len)
 {
-    ssize_t result;
-
-    result = write(fd, buf, *response_len);
+    ssize_t result = write(fd, buf, *response_len);
+    char   *str;
     if(result < 0)
     {
         perror("Failed to send response");
         return -1;
     }
-    printf("write content: %s\n", buf);
+
+    // Print the hex representation of the response
+    printf("write content (hex): ");
+    for(size_t i = 0; i < *response_len; i++)
+    {
+        printf("%02X ", buf[i]);
+    }
+    printf("\n");
+
+    // Print the unencoded message (as a C string)
+    // Create a temporary buffer and null-terminate it.
+    str = (char *)malloc(*response_len + 1);
+    if(str != NULL)
+    {
+        memcpy(str, buf, *response_len);
+        str[*response_len] = '\0';
+        printf("write content (string): %s\n", str);
+        free(str);
+    }
+
     return 0;
 }
 
