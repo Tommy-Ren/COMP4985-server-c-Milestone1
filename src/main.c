@@ -1,4 +1,5 @@
 #include "../include/network.h"
+#include "../include/utils.h" /* Added to declare setup_signal_handler */
 #include <memory.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -10,18 +11,17 @@
 int main(int argc, char *argv[])
 {
     Arguments args;
-    pid_t     pid;
     int       retval;
     int       sockfd;
-    int       sm_fd;    // Server manager file descriptor
-
+    int       sm_fd; /* Server manager file descriptor */
+    sm_fd = -1;
     memset(&args, 0, sizeof(Arguments));
     args.ip   = NULL;
     args.port = 0;
 
     parse_args(argc, argv, &args);
 
-    // Initialize user list
+    /* Initialize user list */
     init_user_list();
 
     printf("Listening on %s:%d\n", args.ip, args.port);
@@ -40,17 +40,17 @@ int main(int argc, char *argv[])
 
     printf("Connecting to server manager on %s:%d\n", args.sm_ip, args.sm_port);
     sm_fd = server_manager_tcp(&args);
-    // if(sm_fd < 0)
-    // {
-    //     perror("Failed to connect to server manager\n");
-    //     retval = EXIT_FAILURE;
-    //     goto exit;
-    // }
+    /* if (sm_fd < 0)
+    {
+        perror("Failed to connect to server manager\n");
+        retval = EXIT_FAILURE;
+        goto exit;
+    } */
 
-    // Connect to server manager
-    // handle_sm(sm_fd, sockfd);
+    /* Connect to server manager */
+    /* handle_sm(sm_fd, sockfd); */
 
-    // Handle client connections
+    /* Handle client connections */
     handle_clients(sockfd);
 
 exit:
