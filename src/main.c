@@ -18,9 +18,6 @@ int main(int argc, char *argv[])
 
     parse_args(argc, argv, &args);
 
-    // Initialize user list (DBM-based)
-    init_user_list();
-
     printf("Listening on %s:%d\n", args.ip, args.port);
 
     // Set up signal handler
@@ -40,15 +37,20 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Failed to connect to server manager, continuing without it.\n");
     }
 
-    // handle_clients() should run its loop while server_running is true.
-    handle_clients(sockfd);
+    // handle_connections() handle server manager and clients
+    handle_connections(sockfd, sm_fd);
 
     // When a shutdown signal is received, handle_clients() returns.
     if(sm_fd >= 0)
     {
         close(sm_fd);
+        sm_fd = -1;
     }
-    close(sockfd);
+    if(sockfd >= 0)
+    {
+        close(sockfd);
+        sockfd = -1;
+    }
 
     return EXIT_SUCCESS;
 }

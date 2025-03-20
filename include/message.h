@@ -2,30 +2,28 @@
 #define message_h
 
 #include "../include/user_db.h"
-#include <netdb.h>
-#include <netinet/in.h>
+#include <poll.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <unistd.h>
 
 #define SYSID (0)
-#define VERSION_NUM (2)    // Updated to Protocol Version 2
+#define VERSION_NUM (3)    // Updated to Protocol Version 3
 
 #define MAX_FDS (5)
 #define TIMEOUT (3000)
 
 #define HEADERLEN (6)
-#define TIMESTRLEN (15)
-#define PACKETLEN (777)
-#define MAXPAYLOADLEN (771)
 #define U8ENCODELEN (3)
-#define SYS_SUCCESS_LEN (3)
-#define ACC_LOGIN_SUCCESS_LEN (4)
+#define RESPONSELEN (256)
+#define MESSAGE_NUM (100)
+#define MESSAGE_LEN (14)
 
-#define ERROR_READ_HEADER (-1)
-#define ERROR_DECODE_HEADER (-2)
-#define ERROR_REALLOCATE (-3)
-#define ERROR_READ_PAYLOAD (-4)
-#define ERROR_DECODE_PAYLOAD (-5)
-#define EXCEEDMAXPAYLOAD (-6)
+#define ACCOUNT_ERROR (-1)
+#define ACCOUNT_LOGIN_ERROR (-2)
+#define ACCOUNT_CREATE_ERROR (-3)
+#define ACCOUNT_EDIT_ERROR (-4)
+#define CHAT_ERROR (-5)
 
 #define UNKNOWNTYPE "Unknown Type"
 
@@ -87,53 +85,29 @@ typedef enum
     EC_REQ_TIMEOUT = 0x20
 } error_code_t;
 
-/* Message Header */
-typedef struct header_t
+/* Message*/
+typedef struct message_t
 {
-    uint8_t  type;
-    uint8_t  version;
-    uint16_t sender_id;
-    uint16_t payload_len;
-} header_t;
+    // Header (6 bytes)
+    uint8_t  type;           // Packet type (1 byte)
+    uint8_t  version;        // Protocol version (1 byte)
+    uint16_t sender_id;      // Sender ID (2 bytes)
+    uint16_t payload_len;    // Payload length (2 bytes)
 
-typedef struct body_t
-{
-    uint8_t *msg;
-} body_t;
+    // Request
+    void *req_buf;    // Request buffer
 
-typedef struct res_body_t
-{
-    uint8_t  tag;
-    uint8_t  len;
-    uint8_t  value;
-    uint8_t  msg_tag;
-    uint8_t  msg_len;
-    uint8_t *msg;
-} res_body_t;
+    // Resonse
+    void    *res_buf;         // Response buffer
+    uint16_t response_len;    // Response length
 
-typedef struct account_t
-{
-    uint8_t  username_tag;
-    uint8_t  username_len;
-    uint8_t *username;
-    uint8_t  password_tag;
-    uint8_t  password_len;
-    uint8_t *password;
-} account_t;
-
-typedef struct request_t
-{
-    header_t *header;
-    uint8_t   header_len;
-    body_t   *body;
-} request_t;
-
-typedef struct response_t
-{
-    header_t     *header;
-    error_code_t *code;
-    res_body_t   *body;
-} response_t;
+    // Shared
+    error_code_t   code;          // Error code
+    int            client_fd;     // Client file descriptor
+    int           *client_id;     // Client ID
+    int           *user_count;    // User count
+    struct pollfd *fds;           // Poll file descriptor
+} message_t;
 
 typedef struct
 {
@@ -141,17 +115,23 @@ typedef struct
     const char  *msg;
 } error_code_map;
 
-typedef struct user_count_t
+typedef enum
 {
-    uint8_t  type;
-    uint8_t  version;
-    uint16_t payload_len;
-    uint8_t  tag;
-    uint8_t  len;
-    uint16_t value;
-} user_count_t;
+    // Manager
+    MAN_SUCCESS = 0x00,
+    MAN_ERROR   = 0x01,
 
-void handle_clients(int server_fd);
-int  process_req(int client_fd);
+    // Server Diagnostics
+    SVR_DIAGNOSTIC = 0x0A,
+    USR_ONLINE     = 0x0B,
+    SVR_ONLINE     = 0x0C,
+    SVR_OFFLINE    = 0x0D,
+
+    // Server Commands
+    SVR_START = 0x14,
+    SVR_STOP  = 0x15,
+} sm_type_t;
+
+void handle_connections(int server_fd, int sm_fd);
 
 #endif

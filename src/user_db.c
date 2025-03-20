@@ -8,235 +8,163 @@
  ******************************************************************************/
 
 #include "../include/user_db.h"
+#include <errno.h>
 #include <fcntl.h>
-#include <gdbm.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
-/* Named constants */
-#define USER_DB_MODE 0666
-#define DB_NAME_SIZE 32
-#define KEY_STR_SIZE 16
-
-/* Global pointer for the user list DB */
-static DBM *user_db = NULL; /* NOLINT(cppcoreguidelines-avoid-non-const-global-variables) */
-
-/* Prototypes for externally visible functions */
-user_obj *new_user(void);
-void      list_all_users(void);
+#pragma GCC diagnostic ignored "-Waggregate-return"
 
 /* --- Functions for account credential storage --- */
 
 /* Opens the DBM database specified by dbo->name.
    Returns 0 on success, -1 on error. */
-int database_open(DBO *dbo)
+ssize_t database_open(DBO *dbo)
 {
-    if(dbo == NULL || dbo->name == NULL)
+    dbo->db = dbm_open(dbo->name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+    if(!dbo->db)
     {
-        return -1;
-    }
-    dbo->db = dbm_open(dbo->name, O_RDWR | O_CREAT, USER_DB_MODE);
-    if(dbo->db == NULL)
-    {
-        perror("database_open: dbm_open failed");
+        perror("dbm_open failed");
         return -1;
     }
     return 0;
-}
-
-/* Retrieves a stored string value for the given key from the database.
-   Returns a newly allocated copy of the string on success, or NULL if not found. */
-char *retrieve_string(DBM *db, char *key)
-{
-    datum key_datum;
-    datum data;
-    char *value;
-
-    if(db == NULL || key == NULL)
-    {
-        return NULL;
-    }
-    key_datum.dptr  = key;
-    key_datum.dsize = (datum_size)(strlen(key) + 1);
-    data            = dbm_fetch(db, key_datum);
-    if(data.dptr == NULL)
-    {
-        return NULL;
-    }
-    value = (char *)malloc((size_t)data.dsize);
-    if(value == NULL)
-    {
-        perror("retrieve_string: malloc failed");
-        return NULL;
-    }
-    memcpy(value, data.dptr, (size_t)data.dsize);
-    return value;
 }
 
 /* Stores the string value under the given key in the database.
    Returns 0 on success, -1 on failure. */
-int store_string(DBM *db, char *key, char *value)
+int store_string(DBM *db, const char *key, const char *value)
 {
-    datum key_datum;
-    datum data;
+    const_datum key_datum   = MAKE_CONST_DATUM(key);
+    const_datum value_datum = MAKE_CONST_DATUM(value);
 
-    if(db == NULL || key == NULL || value == NULL)
-    {
-        return -1;
-    }
-    key_datum.dptr  = key;
-    key_datum.dsize = (datum_size)(strlen(key) + 1);
-    data.dptr       = value;
-    data.dsize      = (datum_size)(strlen(value) + 1);
-    if(dbm_store(db, key_datum, data, DBM_REPLACE) != 0)
-    {
-        perror("store_string: dbm_store failed");
-        return -1;
-    }
-    return 0;
+    return dbm_store(db, *(datum *)&key_datum, *(datum *)&value_datum, DBM_REPLACE);
 }
 
-/* --- Functions for user list management --- */
-
-/* Initializes the user list database for storing user_obj structures.
-   Returns 0 on success, -1 on failure. */
-int init_user_list(void)
+int store_int(DBM *db, const char *key, int value)
 {
-    const char *const_db_name = "user_db";
-    // Create a mutable buffer to hold the database name.
-    char db_name[DB_NAME_SIZE];
-    strncpy(db_name, const_db_name, sizeof(db_name) - 1);
-    db_name[sizeof(db_name) - 1] = '\0';
+    const_datum key_datum = MAKE_CONST_DATUM(key);
+    datum       value_datum;
+    int         result;
 
-    user_db = dbm_open(db_name, O_RDWR | O_CREAT, USER_DB_MODE);
-    if(user_db == NULL)
+    value_datum.dptr = (char *)malloc(TO_SIZE_T(sizeof(int)));
+
+    if(value_datum.dptr == NULL)
     {
-        perror("Failed to open user database");
         return -1;
     }
-    printf("DBM database '%s' opened successfully.\n", db_name);
-    return 0;
+
+    memcpy(value_datum.dptr, &value, sizeof(int));
+    value_datum.dsize = sizeof(int);
+
+    result = dbm_store(db, *(datum *)&key_datum, value_datum, DBM_REPLACE);
+
+    free(value_datum.dptr);
+    return result;
 }
 
-/* Allocates and initializes a new user object.
-   Returns a pointer to the new user_obj or NULL on failure. */
-user_obj *new_user(void)
+int store_byte(DBM *db, const void *key, size_t k_size, const void *value, size_t v_size)
 {
-    user_obj *user;
-    user = (user_obj *)malloc(sizeof(user_obj));
-    if(user == NULL)
+    const_datum key_datum   = MAKE_CONST_DATUM_BYTE(key, k_size);
+    const_datum value_datum = MAKE_CONST_DATUM_BYTE(value, v_size);
+
+    return dbm_store(db, *(datum *)&key_datum, *(datum *)&value_datum, DBM_REPLACE);
+}
+
+/* Retrieves a stored string value for the given key from the database.
+   Returns a newly allocated copy of the string on success, or NULL if not found. */
+char *retrieve_string(DBM *db, const char *key)
+{
+    const_datum key_datum;
+    datum       result;
+    char       *retrieved_str;
+
+    key_datum = MAKE_CONST_DATUM(key);
+
+    result = dbm_fetch(db, *(datum *)&key_datum);
+
+    if(result.dptr == NULL)
     {
-        perror("new_user: Failed to allocate memory for new user");
         return NULL;
     }
-    memset(user, 0, sizeof(user_obj));
-    return user;
+
+    retrieved_str = (char *)malloc(TO_SIZE_T(result.dsize));
+
+    if(!retrieved_str)
+    {
+        return NULL;
+    }
+
+    memcpy(retrieved_str, result.dptr, TO_SIZE_T(result.dsize));
+
+    return retrieved_str;
 }
 
-/* Adds a user object to the user list database.
-   Returns 0 on success, -1 on failure. */
-int add_user(user_obj *user)
+int retrieve_int(DBM *db, const char *key, int *result)
 {
-    datum key;
-    datum data;
-    char  key_str[KEY_STR_SIZE];
+    datum       fetched;
+    const_datum key_datum = MAKE_CONST_DATUM(key);
 
-    sprintf(key_str, "%d", user->id);
-    key.dptr  = key_str;
-    key.dsize = (datum_size)(strlen(key_str) + 1);
+    fetched = dbm_fetch(db, *(datum *)&key_datum);
 
-    data.dptr  = (char *)user;
-    data.dsize = sizeof(user_obj);
-
-    if(dbm_store(user_db, key, data, DBM_REPLACE) != 0)
+    if(fetched.dptr == NULL || fetched.dsize != sizeof(int))
     {
-        perror("add_user: dbm_store failed");
         return -1;
     }
-    printf("User added with ID: %d\n", user->id);
+
+    memcpy(result, fetched.dptr, sizeof(int));
+
     return 0;
 }
 
-/* Removes a user from the user list database by user ID. */
-void remove_user(int user_id)
+void *retrieve_byte(DBM *db, const void *key, size_t size)
 {
-    datum key;
-    char  key_str[KEY_STR_SIZE];
+    const_datum key_datum;
+    datum       result;
+    char       *retrieved_str;
 
-    sprintf(key_str, "%d", user_id);
-    key.dptr  = key_str;
-    key.dsize = (datum_size)(strlen(key_str) + 1);
+    key_datum = MAKE_CONST_DATUM_BYTE(key, size);
 
-    if(dbm_delete(user_db, key) != 0)
+    result = dbm_fetch(db, *(datum *)&key_datum);
+
+    if(result.dptr == NULL)
     {
-        printf("remove_user: User with ID %d not found or deletion failed\n", user_id);
+        return NULL;
     }
-    else
+
+    retrieved_str = (char *)malloc(TO_SIZE_T(result.dsize));
+
+    if(!retrieved_str)
     {
-        printf("Removed user with ID: %d\n", user_id);
+        return NULL;
     }
+
+    memcpy(retrieved_str, result.dptr, TO_SIZE_T(result.dsize));
+
+    return retrieved_str;
 }
 
-/* Finds a user in the user list database by their user ID.
-   Returns a dynamically allocated copy of the user_obj if found, or NULL if not found.
-   The caller is responsible for freeing the returned memory. */
-user_obj *find_user(int user_id)
+ssize_t init_pk(DBO *dbo, const char *pk_name, int *pk)
 {
-    datum     key;
-    char      key_str[KEY_STR_SIZE];
-    user_obj *user;
-
-    sprintf(key_str, "%d", user_id);
-    key.dptr  = key_str;
-    key.dsize = (datum_size)(strlen(key_str) + 1);
-
+    if(database_open(dbo) < 0)
     {
-        /* Limit the scope of 'data' */
-        datum data = dbm_fetch(user_db, key);
-        if(data.dptr == NULL)
-        {
-            return NULL;
-        }
-        user = (user_obj *)malloc(sizeof(user_obj));
-        if(user == NULL)
-        {
-            perror("find_user: Failed to allocate memory for user fetch");
-            return NULL;
-        }
-        memcpy(user, data.dptr, sizeof(user_obj));
+        perror("init_pk database_open failed");
+        return -1;
     }
-    return user;
-}
 
-/* Lists all users stored in the user list database. */
-void list_all_users(void)
-{
-    datum    key;
-    user_obj temp_user;
-
-    printf("Listing all users in DBM:\n");
-    key = dbm_firstkey(user_db);
-    while(key.dptr != NULL)
+    if(retrieve_int(dbo->db, pk_name, pk) < 0)
     {
-        datum data;
-        data = dbm_fetch(user_db, key);
-        if(data.dptr != NULL)
+        // *pk = 0;
+        *pk = 2;
+        if(store_int(dbo->db, pk_name, *pk) != 0)
         {
-            memcpy(&temp_user, data.dptr, sizeof(user_obj));
-            printf("User ID: %d\n", temp_user.id);
+            return -1;
         }
-        key = dbm_nextkey(user_db);
     }
-}
 
-void close_user_list(void)
-{
-    if(user_db)
-    {
-        dbm_close(user_db);
-        printf("DBM database closed.\n");
-        user_db = NULL;
-    }
+    printf("Retrieved user_count: %d\n", *pk);
+
+    dbm_close(dbo->db);
+    return 0;
 }

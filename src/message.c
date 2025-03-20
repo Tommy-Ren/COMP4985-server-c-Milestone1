@@ -1,9 +1,11 @@
 #include "../include/message.h"
 #include "../include/account.h"
+#include "../include/chat.h"
 #include "../include/network.h"
 #include "../include/user_db.h"
 #include "../include/utils.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -11,15 +13,20 @@
 #include <string.h>
 #include <unistd.h>
 
+uint16_t user_count = 0;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
+uint32_t msg_count  = 0;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
+int      user_index = 0;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
+
 /* Declaration for static functions */
-static ssize_t     read_packet(int fd, uint8_t **buf, request_t *request, response_t *response);
-static ssize_t     create_response(const request_t *request, response_t *response, uint8_t **buf, size_t *response_len);
-static ssize_t     sent_response(int fd, const uint8_t *buf, const size_t *response_len);
-static ssize_t     decode_header(header_t *header, response_t *response, const uint8_t *buf, ssize_t nread);
-static ssize_t     decode_payload(request_t *request, response_t *response, const uint8_t *buf, ssize_t nread);
-static ssize_t     encode_header(const response_t *response, uint8_t *buf);
-static ssize_t     encode_body(const response_t *response, uint8_t *buf);
+static ssize_t     handle_request(int client_fd, message_t *message);
+static ssize_t     handle_package(message_t *message);
+static ssize_t     handle_header(message_t *message, ssize_t nread);
+static ssize_t     handle_payload(message_t *message, ssize_t nread);
+static ssize_t     send_response(message_t *message);
+static void        send_sm_response(int sm_fd, char *msg);
+static ssize_t     send_error_response(message_t *message);
 static const char *error_code_to_string(const error_code_t *code);
+static void        count_user(const int *client_id);
 
 /* Error code map */
 static const error_code_map code_map[] = {
@@ -28,33 +35,47 @@ static const error_code_map code_map[] = {
     {EC_INV_AUTH_INFO, "Invalid Authentication"},
     {EC_USER_EXISTS,   "User Already Exist"    },
     {EC_SERVER,        "Server Error"          },
-    {EC_INV_REQ,       "Invalid Request"       },
-    {EC_REQ_TIMEOUT,   "Request Timeout"       }
+    {EC_INV_REQ,       "Invalid message"       },
+    {EC_REQ_TIMEOUT,   "message Timeout"       }
 };
 
-void handle_clients(int server_fd)
+void handle_connections(int server_fd, int sm_fd)
 {
-    struct pollfd fds[MAX_FDS];
     /* Use the global server_running variable declared in utils.h */
     /* volatile sig_atomic_t server_running is already defined externally */
-    int poll_count;
-    int i;
+    struct pollfd fds[MAX_FDS];
+    int           client_id[MAX_FDS];
+    char          db_name[] = "meta_db";
+    DBO           meta_db;
+    int           poll_count;
+    ssize_t       result;
+    message_t     message;
+    char          sm_msg[MESSAGE_NUM];
+    int           i;
 
-    /* Initialize user DB */
-    if(init_user_list() < 0)
+    // Initialize fds
+    fds[0].fd     = server_fd;
+    fds[0].events = POLLIN;
+    for(int i = 1; i < MAX_FDS; i++)
     {
-        perror("init_user_list error");
+        fds[i].fd    = -1;
+        client_id[i] = -1;
+    }
+
+    // Initialize db
+    meta_db.name = db_name;
+    if(init_pk(&meta_db, "USER_PK", &user_count) < 0)
+    {
+        perror("Failed to initialize meta_db\n");
+        goto exit;
+    }
+    if(database_open(&meta_db) < 0)
+    {
+        perror("Failed to open meta_db");
         goto exit;
     }
 
-    /* Initialize pollfd structure */
-    memset(fds, 0, sizeof(fds));
-    fds[0].fd     = server_fd;
-    fds[0].events = POLLIN;
-    for(i = 1; i < MAX_FDS; i++)
-    {
-        fds[i].fd = -1;
-    }
+    handle_sm_diagnostic(&sm_msg);
 
     /* Global server_running will be used here */
     while(server_running)
@@ -62,18 +83,30 @@ void handle_clients(int server_fd)
         errno      = 0;
         poll_count = poll(fds, MAX_FDS, TIMEOUT);
 
+        // Poll for events on the file descriptors
         if(poll_count < 0)
         {
+            if(errno == EINTR)
+            {
+                goto exit;
+            }
             perror("poll error");
             goto exit;
         }
-
+        // Check for events on existing client connections
         if(poll_count == 0)
         {
             printf("poll timeout\n");
+            if(store_int(meta_db.db, "USER_PK", user_index) != 0)
+            {
+                perror("update user_index");
+                goto exit;
+            }
+            count_user(client_id);
+            send_sm_response(sm_fd, sm_msg);
             continue;
         }
-
+        // Check for new client connections
         if(fds[0].revents & POLLIN)
         {
             int                     client_added;
@@ -105,6 +138,7 @@ void handle_clients(int server_fd)
                     break;
                 }
             }
+
             if(!client_added)
             {
                 printf("Too many clients connected. Rejecting connection.\n");
@@ -113,16 +147,21 @@ void handle_clients(int server_fd)
             }
         }
 
+        // Handle incoming client connections
         for(i = 1; i < MAX_FDS; i++)
         {
+            // Skip empty file descriptors
             if(fds[i].fd == -1)
             {
                 continue;
             }
-
-            if(fds[i].revents & (POLLIN | POLLERR))
+            // Check for incoming data or errors on the client connection
+            if(fds[i].revents & POLLIN)
             {
-                if(process_req(fds[i].fd) < 0)
+                message.fds        = fds;
+                message.client_id  = &client_id[i];
+                message.user_count = &user_count;
+                if(handle_request(fds[i].fd, &message) < 0)
                 {
                     close(fds[i].fd);
                     fds[i].fd = -1;
@@ -131,436 +170,335 @@ void handle_clients(int server_fd)
         }
     }
 
+    // Sync the user database
+    if(store_int(meta_db.db, "USER_PK", user_index) != 0)
+    {
+        perror("Failed to sync user database");
+        goto exit;
+    }
+    dbm_close(meta_db.db);
+
 exit:
     /* Use the close_user_list() function to close the user database */
-    close_user_list();
+    store_int(meta_db.db, "USER_PK", user_index);
+    dbm_close(meta_db.db);
 }
 
-int process_req(int client_fd)
+ssize_t handle_request(int client_fd, message_t *message)
 {
-    int          retval;
-    request_t    request;
-    header_t     req_header;
-    response_t   response;
-    header_t     res_header;
-    uint8_t     *res_buf = NULL;
-    size_t       response_len;
-    uint8_t     *buf = NULL;
-    error_code_t code;
-
-    // retval                       = EXIT_SUCCESS;
-    request.header               = &req_header;
-    request.header_len           = sizeof(header_t);
-    response.header              = &res_header;
-    response.header->payload_len = 3;
-    response.code                = &code;
-    response_len                 = sizeof(header_t);
-    code                         = EC_GOOD;
+    int retval;
+    message->client_fd    = client_fd;
+    message->payload_len  = HEADERLEN;
+    message->response_len = U8ENCODELEN;
+    message->req_buf      = malloc(HEADERLEN);
+    message->code         = EC_GOOD;
 
     /* Initialize pointers to NULL explicitly */
-    request.body  = NULL;
-    response.body = NULL;
-
-    request.body = (body_t *)malloc(sizeof(body_t));
-    if(!request.body)
+    message->req_buf = malloc(HEADERLEN);
+    if(!message->req_buf)
     {
-        perror("Failed to allocate request body");
+        perror("Failed to allocate message");
         retval = -1;
         goto exit;
     }
 
-    response.body = (res_body_t *)malloc(sizeof(res_body_t));
-    if(!response.body)
+    memset(message->res_buf, 0, RESPONSELEN);
+    if(!message->res_buf)
     {
         perror("Failed to allocate response body");
         retval = -1;
         goto exit;
     }
 
-    buf = (uint8_t *)calloc(request.header_len, sizeof(uint8_t));
-    if(!buf)
-    {
-        perror("Failed to allocate buf");
-        retval = -1;
-        goto exit;
-    }
-
-    if(read_packet(client_fd, &buf, &request, &response) < 0)
+    if(handle_package(message) < 0)
     {
         perror("Failed to read packet");
         retval = -1;
         goto exit;
     }
 
-    account_handler(&request, &response);
-
-    if(create_response(&request, &response, &res_buf, &response_len) < 0)
-    {
-        perror("Failed to create response");
-        retval = -1;
-        goto exit;
-    }
-
-    /* Corrected call to sent_response() */
-    if(sent_response(client_fd, res_buf, &response_len) < 0)
-    {
-        perror("Failed to send response");
-        retval = -1;
-        goto exit;
-    }
     retval = EXIT_SUCCESS;
 
 exit:
-    if(res_buf != NULL)
-    {
-        free(res_buf);
-    }
-    if(buf != NULL)
-    {
-        free(buf);
-    }
-    if(response.body != NULL)
-    {
-        free(response.body);
-    }
-    if(request.body != NULL)
-    {
-        free(request.body);
-    }
+    sfree(message->res_buf);
+    sfree(message->res_buf);
     return retval;
 }
 
 /* BER Decoder function */
-static ssize_t read_packet(int fd, uint8_t **buf, request_t *request, response_t *response)
+static ssize_t handle_package(message_t *message)
 {
-    size_t   header_len = request->header_len;
-    uint16_t payload_len;
-    ssize_t  nread;
+    int     retval;
+    ssize_t nread;
 
-    nread = read(fd, *buf, header_len);
+    nread = read(message->client_fd, (char *)message->req_buf, message->payload_len);
     if(nread < 0)
     {
         perror("Fail to read header");
-        *(response->code) = EC_SERVER;
-        return ERROR_READ_HEADER;
+        message->code = EC_SERVER;
+        return -1;
     }
-    if(decode_header(request->header, response, *buf, nread) < 0)
+
+    if(handle_header(message, nread) < 0)
     {
         perror("Failed to decode header");
-        return ERROR_DECODE_HEADER;
+        return -1;
     }
 
-    payload_len = request->header->payload_len;
-    if(!payload_len)
+    // Reallocate buffer to fit the payload
+    message->req_buf = realloc(message->req_buf, message->payload_len + HEADERLEN);
+    if(message->req_buf == NULL)
     {
-        return 0;
+        perror("Failed to reallocate message body\n");
+        message->code = EC_SERVER;
+        return -1;
     }
 
-    *buf = (uint8_t *)realloc(*buf, HEADERLEN + payload_len);
-    if(*buf == NULL)
-    {
-        perror("Failed to reallocate buffer for payload");
-        *(response->code) = EC_SERVER;
-        return ERROR_REALLOCATE;
-    }
-
-    nread = read(fd, *buf + header_len, payload_len);
+    // Read payload_length into buffer
+    nread = read(message->client_fd, message->req_buf + HEADERLEN, message->payload_len);
     if(nread < 0)
     {
-        perror("Failed to read payload");
-        *(response->code) = EC_SERVER;
-        return ERROR_READ_PAYLOAD;
+        perror("Failed to read message body\n");
+        message->code = EC_SERVER;
+        return -1;
     }
 
-    if(decode_payload(request, response, *buf + header_len, nread) < 0)
+    retval = handle_payload(message, nread);
+    if(retval == ACCOUNT_ERROR)
     {
-        perror("Failed to decode payload");
-        return ERROR_DECODE_PAYLOAD;
+        perror("Failed to identify account package\n");
+        return ACCOUNT_ERROR;
+    }
+    else if(retval == ACCOUNT_LOGIN_ERROR)
+    {
+        perror("Failed to login\n");
+        return ACCOUNT_LOGIN_ERROR;
+    }
+    else if(retval == ACCOUNT_CREATE_ERROR)
+    {
+        perror("Failed to create account\n");
+        return ACCOUNT_CREATE_ERROR;
+    }
+    else if(retval == ACCOUNT_EDIT_ERROR)
+    {
+        perror("Failed to edit account\n");
+        return ACCOUNT_EDIT_ERROR;
+    }
+    else if(retval == CHAT_ERROR)
+    {
+        perror("Chat error\n");
+        return CHAT_ERROR;
     }
 
     return 0;
 }
 
-static ssize_t create_response(const request_t *request, response_t *response, uint8_t **buf, size_t *response_len)
+static ssize_t handle_header(message_t *message, ssize_t nread)
 {
-    uint8_t    *temp;
-    const char *msg;
+    char *buf;
 
-    *response_len = (size_t)(request->header_len + response->header->payload_len);
-    printf("response_len: %d\n", (int)*response_len);
-
-    *buf = (uint8_t *)malloc(*response_len);
-    if(*buf == NULL)
+    buf = (char *)message->req_buf;
+    if(nread < (ssize_t)sizeof(message->payload_len))
     {
-        perror("Failed to allocate response buffer");
-        *(response->code) = EC_SERVER;
+        perror("Payload length mismatch\n");
+        message->code = EC_INV_REQ;
         return -1;
     }
 
-    msg = error_code_to_string(response->code);
+    memcpy(&message->type, buf, sizeof(message->type));
+    buf += sizeof(message->type);
 
-    response->body->msg_tag = (uint8_t)BER_STR;
-    response->body->msg_len = (uint8_t)(strlen(msg));
-    printf("msg_len: %d\n", (int)response->body->msg_len);
+    memcpy(&message->version, buf, sizeof(message->version));
+    buf += sizeof(message->version);
 
-    *response_len = *response_len + response->body->msg_len + 2;
-    printf("response_len final: %d\n", (int)*response_len);
+    memcpy(&message->sender_id, buf, sizeof(message->sender_id));
+    buf += sizeof(message->sender_id);
+    message->sender_id = ntohs(message->sender_id);
 
-    if(*response->code == EC_GOOD)
+    memcpy(&message->payload_len, buf, sizeof(message->payload_len));
+    message->payload_len = ntohs(message->payload_len);
+
+    // DEBUG
+    printf("Header type: %d\n", (int)message->type);
+    printf("Header version: %d\n", (int)message->version);
+    printf("Header sender_id: %d\n", (int)message->sender_id);
+    printf("Header payload_len: %d\n", (int)message->payload_len);
+
+    return 0;
+}
+
+static ssize_t handle_payload(message_t *message, ssize_t nread)
+{
+    int retval;
+
+    if(nread < (ssize_t)message->payload_len)
     {
-        response->header->type      = ACC_LOGIN_SUCCESS;
-        response->header->version   = VERSION_NUM;
-        response->header->sender_id = 0x00;
-        if(request->header->type == ACC_LOGOUT)
+        printf("Payload length mismatch");
+        message->code = EC_INV_REQ;
+        return ACCOUNT_ERROR;
+    }
+
+    // If package type is account
+    retval = account_handler(message);
+    if(retval < 0)
+    {
+        send_error_response(message);
+    }
+
+    // If package type if chat
+    retval = chat_handler(message);
+    if(retval < 0)
+    {
+        send_error_response(message);
+    }
+    message->code = EC_INV_REQ;
+
+    return 0;
+}
+
+static ssize_t send_response(message_t *message)
+{
+    if(message->type != CHT_SEND)
+    {
+        message->response_len = (uint16_t)(HEADERLEN + ntohs(message->response_len));
+        printf("response_len: %d\n", (message->response_len));
+        write(message->client_fd, message->res_buf, message->response_len);
+    }
+
+    sfree(message->req_buf);
+    close(message->client_fd);
+    message->client_fd = -1;
+
+    return 0;
+}
+
+static void count_user(const int *client_id)
+{
+    user_count = 0;
+    for(int i = 1; i < MAX_FDS; i++)
+    {
+        printf("user id: %d\n", client_id[i]);
+        if(client_id[i] != -1)
         {
-            response->header->payload_len = 0;
-            *response_len                 = *response_len - 2 - 3;
-        }
-        else
-        {
-            response->header->payload_len = (uint16_t)3;
-            *response_len -= 2;
+            user_count++;
         }
     }
-    else if(*response->code == EC_INV_AUTH_INFO)
-    {
-        printf("*response->code == INVALID_AUTH\n");
-        response->header->type        = SYS_ERROR;
-        response->header->version     = VERSION_NUM;
-        response->header->sender_id   = 0x00;
-        response->header->payload_len = (uint16_t)(3 + response->body->msg_len + 2);
+    printf("Current number of users: %d\n", user_count);
+}
 
-        temp = (uint8_t *)realloc(*buf, *response_len);
-        if(temp == NULL)
-        {
-            perror("read_packet::realloc");
-            *(response->code) = EC_SERVER;
-            return -4;
-        }
-        *buf = temp;
+static void handle_sm_diagnostic(char *msg)
+{
+    char    *ptr;
+    uint16_t msg_payload_len = htons(0x000A);
+
+    ptr = msg;
+
+    *ptr++ = SVR_DIAGNOSTIC;
+    *ptr++ = VERSION_NUM;
+    memcpy(ptr, &msg_payload_len, sizeof(msg_payload_len));
+    ptr += sizeof(msg_payload_len);
+
+    *ptr++     = BER_INT;
+    *ptr++     = sizeof(user_count);
+    user_count = htons(user_count);
+    memcpy(ptr, &user_count, sizeof(user_count));
+    ptr += sizeof(user_count);
+
+    *ptr++    = BER_INT;
+    *ptr++    = sizeof(msg_count);
+    msg_count = htonl(msg_count);
+    memcpy(ptr, &msg_count, sizeof(msg_count));
+}
+
+static void send_sm_response(int sm_fd, char *msg)
+{
+    char      *ptr;
+    int        fd;
+    const char log[] = "./text.txt";
+
+    ptr = msg;
+    ptr += HEADERLEN;
+    user_count = htons(user_count);
+    memcpy(ptr, &user_count, sizeof(user_count));
+    ptr += sizeof(user_count) + 1 + 1;
+
+    msg_count = htonl(msg_count);
+    memcpy(ptr, &msg_count, sizeof(msg_count));
+
+    printf("send_user_count\n");
+
+    // testing
+    fd = open(log, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, S_IRUSR | S_IWUSR);
+    if(fd == -1)
+    {
+        perror("Failed to open the file");
     }
     else
     {
-        printf("*response->code == else \n");
-        response->header->type        = SYS_ERROR;
-        response->header->version     = VERSION_NUM;
-        response->header->sender_id   = 0x00;
-        response->header->payload_len = (uint16_t)(3 + response->body->msg_len + 2);
-
-        temp = (uint8_t *)realloc(*buf, *response_len);
-        if(temp == NULL)
-        {
-            perror("read_packet::realloc");
-            *(response->code) = EC_SERVER;
-            return -4;
-        }
-        *buf = temp;
+        write(fd, msg, MESSAGE_LEN);
+        close(fd);
     }
 
-    encode_header(response, *buf);
-    encode_body(response, *buf + sizeof(header_t));
-    return 0;
+    if(write(sm_fd, msg, MESSAGE_LEN) < 0)
+    {
+        perror("Failed to send user count\n");
+    }
 }
 
-ssize_t decode_header(header_t *header, response_t *response, const uint8_t *buf, ssize_t nread)
+static ssize_t send_error_response(message_t *message)
 {
-    size_t pos;
+    char       *ptr;
+    uint16_t    sender_id;
+    const char *msg;
+    uint8_t     msg_len;
 
-    pos = 0;
-    if(nread < (ssize_t)sizeof(header_t))
+    sender_id = SYSID;
+    ptr       = (char *)message->res_buf;
+
+    // If not logout, send error response
+    if(message->type != ACC_LOGOUT)
     {
-        perror("Payload length mismatch");
-        *(response->code) = EC_INV_REQ;
+        // tag
+        *ptr++ = SYS_ERROR;
+        // version
+        *ptr++ = VERSION_NUM;
+        // sender_id
+        sender_id = htons(sender_id);
+        memcpy(ptr, &sender_id, sizeof(sender_id));
+        ptr += sizeof(sender_id);
+        msg                   = error_code_to_string(&message->code);
+        msg_len               = (uint8_t)strlen(msg);
+        message->response_len = (uint16_t)(message->response_len + (sizeof(uint8_t) + sizeof(uint8_t) + msg_len));
+        // payload len
+        message->response_len = htons(message->response_len);
+        memcpy(ptr, &message->response_len, sizeof(message->response_len));
+        ptr += sizeof(message->response_len);
+        // payload CHOICE
+        *ptr++ = BER_INT;
+        *ptr++ = sizeof(uint8_t);
+        memcpy(ptr, &message->code, sizeof(uint8_t));
+        ptr += sizeof(uint8_t);
+        *ptr++ = BER_STR;
+        memcpy(ptr, &msg_len, sizeof(msg_len));
+        ptr += sizeof(msg_len);
+        // response_len
+        memcpy(ptr, msg, msg_len);
+        message->response_len = (uint16_t)(HEADERLEN + ntohs(message->response_len));
+    }
+
+    if(write(message->client_fd, message->res_buf, message->response_len) < 0)
+    {
+        perror("Failed to send error response\n");
+        sfree(message->req_buf);
+        close(message->client_fd);
+        message->client_fd = -1;
         return -1;
     }
 
-    memcpy(&header->type, buf + pos, sizeof(header->type));
-    pos += sizeof(header->type);
-
-    memcpy(&header->version, buf + pos, sizeof(header->version));
-    pos += sizeof(header->version);
-
-    memcpy(&header->sender_id, buf + pos, sizeof(header->sender_id));
-    pos += sizeof(header->sender_id);
-    header->sender_id = ntohs(header->sender_id);
-
-    memcpy(&header->payload_len, buf + pos, sizeof(header->payload_len));
-    header->payload_len = ntohs(header->payload_len);
-
-    printf("Header type: %d\n", (int)header->type);
-    printf("Header version: %d\n", (int)header->version);
-    printf("Header sender_id: %d\n", (int)header->sender_id);
-    printf("Header payload_len: %d\n", (int)header->payload_len);
-
-    return 0;
-}
-
-static ssize_t decode_payload(request_t *request, response_t *response, const uint8_t *buf, ssize_t nread)
-{
-    if(nread < (ssize_t)request->header->payload_len)
-    {
-        printf("Payload length mismatch");
-        *(response->code) = EC_INV_REQ;
-        return -1;
-    }
-
-    if(request->header->type == ACC_CREATE || request->header->type == ACC_LOGIN)
-    {
-        size_t     pos;
-        account_t *acc;
-
-        acc = (account_t *)malloc(sizeof(account_t));
-        if(!acc)
-        {
-            perror("Failed to allocate account_t");
-            *(response->code) = EC_SERVER;
-            return -1;
-        }
-        memset(acc, 0, sizeof(account_t));
-
-        pos = 0;
-
-        memcpy(&acc->username_tag, buf + pos, sizeof(acc->username_tag));
-        pos += sizeof(acc->username_tag);
-
-        printf("username tag: %d\n", (int)acc->username_tag);
-
-        memcpy(&acc->username_len, buf + pos, sizeof(acc->username_len));
-        pos += sizeof(acc->username_len);
-
-        printf("username len: %d\n", (int)acc->username_len);
-
-        acc->username = (uint8_t *)malloc((size_t)acc->username_len + 1);
-        if(!acc->username)
-        {
-            perror("Failed to allocate username");
-            free(acc);
-            *(response->code) = EC_SERVER;
-            return -1;
-        }
-        memcpy(acc->username, buf + pos, acc->username_len);
-        acc->username[acc->username_len] = '\0';
-        pos += acc->username_len;
-
-        printf("username: %s\n", acc->username);
-
-        memcpy(&acc->password_tag, buf + pos, sizeof(acc->password_tag));
-        pos += sizeof(acc->password_tag);
-
-        printf("password tag: %d\n", (int)acc->password_tag);
-
-        memcpy(&acc->password_len, buf + pos, sizeof(acc->password_len));
-        pos += sizeof(acc->password_len);
-
-        printf("password len: %d\n", (int)acc->password_len);
-
-        acc->password = (uint8_t *)malloc((size_t)acc->password_len + 1);
-        if(!acc->password)
-        {
-            perror("Failed to allocate password");
-            free(acc->username);
-            free(acc);
-            *(response->code) = EC_SERVER;
-            return -1;
-        }
-        memcpy(acc->password, buf + pos, acc->password_len);
-        acc->password[acc->password_len] = '\0';
-
-        free(request->body);
-        request->body = (body_t *)acc;
-
-        printf("password: %s\n", acc->password);
-
-        return 0;
-    }
-
-    printf("Invalid type of request: 0x%X\n", request->header->type);
-    *(response->code) = EC_INV_REQ;
-    return -1;
-}
-
-static ssize_t encode_header(const response_t *response, uint8_t *buf)
-{
-    size_t pos;
-
-    pos = 0;
-
-    memcpy(buf + pos, &response->header->type, sizeof(response->header->type));
-    pos += sizeof(response->header->type);
-
-    memcpy(buf + pos, &response->header->version, sizeof(response->header->version));
-    pos += sizeof(response->header->version);
-
-    response->header->sender_id = htons(response->header->sender_id);
-    memcpy(buf + pos, &response->header->sender_id, sizeof(response->header->sender_id));
-    pos += sizeof(response->header->sender_id);
-
-    response->header->payload_len = htons(response->header->payload_len);
-    memcpy(buf + pos, &response->header->payload_len, sizeof(response->header->payload_len));
-
-    return 0;
-}
-
-static ssize_t encode_body(const response_t *response, uint8_t *buf)
-{
-    size_t pos;
-
-    pos = 0;
-
-    memcpy(buf + pos, &response->body->tag, sizeof(response->body->tag));
-    pos += sizeof(response->body->tag);
-
-    memcpy(buf + pos, &response->body->len, sizeof(response->body->len));
-    pos += sizeof(response->body->len);
-
-    memcpy(buf + pos, &response->body->value, sizeof(response->body->value));
-    pos += sizeof(response->body->value);
-
-    response->header->payload_len = htons(response->header->payload_len);
-
-    if(response->header->payload_len > pos)
-    {
-        memcpy(buf + pos, &response->body->msg_tag, sizeof(response->body->msg_tag));
-        pos += sizeof(response->body->msg_tag);
-
-        memcpy(buf + pos, &response->body->msg_len, sizeof(response->body->msg_len));
-        pos += sizeof(response->body->msg_len);
-
-        memcpy(buf + pos, error_code_to_string(response->code), response->header->payload_len - pos);
-    }
-
-    return 0;
-}
-
-static ssize_t sent_response(int fd, const uint8_t *buf, const size_t *response_len)
-{
-    ssize_t result = write(fd, buf, *response_len);
-    char   *str;
-    if(result < 0)
-    {
-        perror("Failed to send response");
-        return -1;
-    }
-
-    // Print the hex representation of the response
-    printf("write content (hex): ");
-    for(size_t i = 0; i < *response_len; i++)
-    {
-        printf("%02X ", buf[i]);
-    }
-    printf("\n");
-
-    // Print the unencoded message (as a C string)
-    // Create a temporary buffer and null-terminate it.
-    str = (char *)malloc(*response_len + 1);
-    if(str != NULL)
-    {
-        memcpy(str, buf, *response_len);
-        str[*response_len] = '\0';
-        printf("write content (string): %s\n", str);
-        free(str);
-    }
-
+    printf("Response: %s\n", (message->res_buf));
+    sfree(message->req_buf);
+    close(message->client_fd);
+    message->client_fd = -1;
     return 0;
 }
 

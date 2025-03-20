@@ -3,7 +3,7 @@
 
 #include <arpa/inet.h>
 
-// struct to hold the values for
+// struct to hold the arguments
 typedef struct Arguments
 {
     const char *ip;
