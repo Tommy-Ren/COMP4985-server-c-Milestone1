@@ -1,20 +1,22 @@
 #include "../include/account.h"
 #include "../include/user_db.h"
+#include "../include/utils.h"    // For sfree
+#include <arpa/inet.h>           // For htons/ntohs/htonl
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+// NOTE: In account.h, change the declaration of account_handler to:
+// ssize_t account_handler(message_t *message);
 static ssize_t account_login(message_t *message);
 static ssize_t account_create(message_t *message);
 static ssize_t account_edit(message_t *message);
 static ssize_t account_logout(message_t *message);
 
-ssize_t account_handler(const message_t *message)
+ssize_t account_handler(message_t *message)
 {
     ssize_t result;
-
     result = ACCOUNT_ERROR;
-
     if(message->type == ACC_CREATE)
     {
         result = account_create(message);
@@ -31,7 +33,6 @@ ssize_t account_handler(const message_t *message)
     {
         result = account_logout(message);
     }
-
     return result;
 }
 
@@ -48,7 +49,7 @@ static ssize_t account_create(message_t *message)
     uint8_t     pass_len;
 
     int   user_id;
-    char *key;
+    char *key = NULL;
     char *ptr;
 
     uint16_t sender_id = SYSID;
@@ -57,11 +58,10 @@ static ssize_t account_create(message_t *message)
     userDB.db         = NULL;
     index_userDB.name = index_name;
     index_userDB.db   = NULL;
-    key               = NULL;
 
     if(database_open(&userDB) < 0)
     {
-        perror("Failed to open user_db\n");
+        perror("Failed to open user_db");
         message->code = EC_SERVER;
         goto error;
     }
@@ -73,26 +73,25 @@ static ssize_t account_create(message_t *message)
         goto error;
     }
 
-    // username len
+    // Extract username from request buffer.
     ptr = (char *)message->req_buf + HEADERLEN + 1;
     memcpy(&user_len, ptr, sizeof(user_len));
-    // username
     ptr += sizeof(user_len);
     username = ptr;
 
-    // password len
+    // Extract password.
     ptr += user_len + 1;
     memcpy(&pass_len, ptr, sizeof(pass_len));
-    // password
     ptr += sizeof(pass_len);
     password = ptr;
 
-    printf("Username: %s\n", (int)user_len, username);
+    // Print extracted values using %.*s.
+    printf("Username: %.*s\n", (int)user_len, username);
     printf("Username length: %d\n", (int)user_len);
-    printf("Password: %s\n", (int)pass_len, password);
+    printf("Password: %.*s\n", (int)pass_len, password);
     printf("Password length: %d\n", (int)pass_len);
 
-    // check user exists
+    // Check if user exists.
     if(retrieve_byte(userDB.db, username, user_len))
     {
         message->code = EC_USER_EXISTS;
@@ -102,30 +101,30 @@ static ssize_t account_create(message_t *message)
     (*message->user_count)++;
     *message->client_id = *message->user_count;
 
-    // Store user
+    // Store user.
     if(store_byte(userDB.db, username, user_len, password, pass_len) != 0)
     {
-        perror("Failed to store username and password\n");
+        perror("Failed to store username and password");
         message->code = EC_SERVER;
         goto error;
     }
     key = strndup(username, user_len);
     if(key == NULL)
     {
-        perror("Failed to allocate memory\n");
+        perror("Failed to allocate memory");
         message->code = EC_SERVER;
         goto error;
     }
 
-    // Store user index
+    // Store user index.
     if(store_int(index_userDB.db, key, *message->client_id) < 0)
     {
-        perror("Failed to store user index\n");
+        perror("Failed to store user index");
         message->code = EC_SERVER;
         goto error;
     }
 
-    // Retrieve existing user id
+    // Retrieve user id.
     if(retrieve_int(index_userDB.db, key, &user_id) < 0)
     {
         printf("Failed to retrieve user info\n");
@@ -135,32 +134,28 @@ static ssize_t account_create(message_t *message)
     printf("User %.*d created\n", (int)sizeof(*message->client_id), user_id);
 
     ptr = (char *)message->res_buf;
-    // tag
-    *ptr++ = SYS_SUCCESS;
-    // version
-    *ptr++ = VERSION_NUM;
-    // sender_id
-    sender_id = htons(sender_id);
+    // Build response.
+    *ptr++    = SYS_SUCCESS;
+    *ptr++    = VERSION_NUM;
+    sender_id = htons(sender_id);    // Removed redundant cast
     memcpy(ptr, &sender_id, sizeof(sender_id));
     ptr += sizeof(sender_id);
-    // payload len
     message->response_len = htons(message->response_len);
     memcpy(ptr, &message->response_len, sizeof(message->response_len));
     ptr += sizeof(message->response_len);
-    // payload CHOICE
     *ptr++ = BER_ENUM;
     *ptr++ = sizeof(uint8_t);
     *ptr++ = ACC_CREATE;
 
     dbm_close(userDB.db);
     dbm_close(index_userDB.db);
-    sfree(key);
+    sfree((void **)&key);
     return 0;
 
 error:
     dbm_close(userDB.db);
     dbm_close(index_userDB.db);
-    sfree(key);
+    sfree((void **)&key);
     return ACCOUNT_CREATE_ERROR;
 }
 
@@ -178,8 +173,8 @@ static ssize_t account_login(message_t *message)
 
     int   user_id;
     datum output;
-    char *existing;
-    char *key;
+    char *existing = NULL;
+    char *key      = NULL;
     char *ptr;
 
     uint16_t sender_id = SYSID;
@@ -188,13 +183,12 @@ static ssize_t account_login(message_t *message)
     userDB.db         = NULL;
     index_userDB.name = index_name;
     index_userDB.db   = NULL;
-    key               = NULL;
 
     memset(&output, 0, sizeof(datum));
 
     if(database_open(&userDB) < 0)
     {
-        perror("Failed to open user_db\n");
+        perror("Failed to open user_db");
         message->code = EC_SERVER;
         goto error;
     }
@@ -206,39 +200,36 @@ static ssize_t account_login(message_t *message)
         goto error;
     }
 
-    // username len
+    // Extract username and password.
     ptr = (char *)message->req_buf + HEADERLEN + 1;
     memcpy(&user_len, ptr, sizeof(user_len));
-    // username
     ptr += sizeof(user_len);
     username = ptr;
 
-    // password len
     ptr += user_len + 1;
     memcpy(&pass_len, ptr, sizeof(pass_len));
-    // password
     ptr += sizeof(pass_len);
     password = ptr;
 
-    printf("Username: %s\n", (int)user_len, username);
+    printf("Username: %.*s\n", (int)user_len, username);
     printf("Username length: %d\n", (int)user_len);
-    printf("Password: %s\n", (int)pass_len, password);
+    printf("Password: %.*s\n", (int)pass_len, password);
     printf("Password length: %d\n", (int)pass_len);
 
-    // Retrieve existing user
+    // Retrieve existing user.
     existing = retrieve_byte(userDB.db, username, user_len);
     if(!existing)
     {
-        perror("Failed to find user\n");
+        perror("Failed to find user");
         message->code = EC_INV_USER_ID;
         goto error;
     }
 
-    // Check if password is correct
+    // Validate password.
     if(memcmp(existing, password, pass_len) != 0)
     {
-        sfree(existing);
-        perror("Failed to provide correct password\n");
+        sfree((void **)&existing);
+        perror("Failed to provide correct password");
         message->code = EC_INV_AUTH_INFO;
         goto error;
     }
@@ -253,139 +244,127 @@ static ssize_t account_login(message_t *message)
 
     if(retrieve_int(index_userDB.db, key, &user_id) < 0)
     {
-        perror("Failed to provide correct password\n");
+        perror("Failed to retrieve user index");
         message->code = EC_SERVER;
         goto error;
     }
     printf("User %.*d logged in\n", (int)sizeof(*message->client_id), user_id);
 
-    ptr = (char *)message->res_buf;
-    // tag
-    *ptr++ = ACC_LOGIN_SUCCESS;
-    // version
-    *ptr++ = SYSID;
-    // sender_id
-    sender_id = htons(sender_id);
+    ptr       = (char *)message->res_buf;
+    *ptr++    = ACC_LOGIN_SUCCESS;
+    *ptr++    = SYSID;
+    sender_id = htons(sender_id);    // Removed redundant cast
     memcpy(ptr, &sender_id, sizeof(sender_id));
     ptr += sizeof(sender_id);
-    // payload len
     message->response_len = 4;
     message->response_len = htons(message->response_len);
     memcpy(ptr, &message->response_len, sizeof(message->response_len));
     ptr += sizeof(message->response_len);
-    // payload CHOICE
     *ptr++ = BER_INT;
     *ptr++ = sizeof(uint16_t);
-    // payload user_id
-    user_id = htons((uint16_t)user_id);
-    memcpy(ptr, &user_id, sizeof(user_id));
-    message->client_id = ntohs((uint16_t)user_id);
+    {
+        uint16_t uid = (uint16_t)user_id;
+        uid          = htons(uid);
+        memcpy(ptr, &uid, sizeof(uid));
+        // Convert back and assign to client_id.
+        *message->client_id = (int)ntohs(uid);
+    }
 
     dbm_close(userDB.db);
     dbm_close(index_userDB.db);
-    sfree(key);
-    sfree(existing);
+    sfree((void **)&key);
+    sfree((void **)&existing);
     return 0;
 
 error:
     dbm_close(userDB.db);
     dbm_close(index_userDB.db);
-    sfree(key);
-    sfree(existing);
+    sfree((void **)&key);
+    sfree((void **)&existing);
     return ACCOUNT_LOGIN_ERROR;
 }
 
 static ssize_t account_edit(message_t *message)
 {
+    char db_name[] = "user_db";
+    DBO  userDB;
+
+    const char *username;
+    const char *new_password;
+    uint8_t     user_len;
+    uint8_t     pass_len;
+
+    char *existing = NULL;
+    char *ptr;
+
+    userDB.name = db_name;
+    userDB.db   = NULL;
+
+    if(database_open(&userDB) < 0)
     {
-        char db_name[] = "user_db";
-        DBO  userDB;
+        perror("Failed to open user_db");
+        message->code = EC_SERVER;
+        goto error;
+    }
 
-        const char *username;
-        const char *new_password;
-        uint8_t     user_len;
-        uint8_t     pass_len;
+    ptr = (char *)message->req_buf + HEADERLEN + 1;
+    memcpy(&user_len, ptr, sizeof(user_len));
+    ptr += sizeof(user_len);
+    username = ptr;
 
-        char *existing;
-        char *ptr;
+    ptr += user_len + 1;
+    memcpy(&pass_len, ptr, sizeof(pass_len));
+    ptr += sizeof(pass_len);
+    new_password = ptr;
 
-        userDB.name = db_name;
-        userDB.db   = NULL;
+    printf("Username: %.*s\n", (int)user_len, username);
+    printf("Username length: %d\n", (int)user_len);
+    printf("New Password: %.*s\n", (int)pass_len, new_password);
+    printf("New Password length: %d\n", (int)pass_len);
 
-        if(database_open(&userDB) < 0)
-        {
-            perror("Failed to open user_db\n");
-            message->code = EC_SERVER;
-            goto error;
-        }
+    existing = retrieve_byte(userDB.db, username, user_len);
+    if(!existing)
+    {
+        perror("Failed to find user");
+        message->code = EC_INV_USER_ID;
+        goto error;
+    }
 
-        // username len
-        ptr = (char *)message->req_buf + HEADERLEN + 1;
-        memcpy(&user_len, ptr, sizeof(user_len));
-        // username
-        ptr += sizeof(user_len);
-        username = ptr;
+    if(store_byte(userDB.db, username, user_len, new_password, pass_len) != 0)
+    {
+        perror("Failed to update password");
+        message->code = EC_SERVER;
+        goto error;
+    }
 
-        // new password len
-        ptr += user_len + 1;
-        memcpy(&pass_len, ptr, sizeof(pass_len));
-        // new password
-        ptr += sizeof(pass_len);
-        new_password = ptr;
+    printf("User %.*s password updated\n", (int)user_len, username);
 
-        printf("Username: %s\n", (int)user_len, username);
-        printf("Username length: %d\n", (int)user_len);
-        printf("New Password: %s\n", (int)pass_len, new_password);
-        printf("New Password length: %d\n", (int)pass_len);
-
-        // Retrieve existing user
-        existing = retrieve_byte(userDB.db, username, user_len);
-        if(!existing)
-        {
-            perror("Failed to find user\n");
-            message->code = EC_INV_USER_ID;
-            goto error;
-        }
-
-        // Update password
-        if(store_byte(userDB.db, username, user_len, new_password, pass_len) != 0)
-        {
-            perror("Failed to update password\n");
-            message->code = EC_SERVER;
-            goto error;
-        }
-
-        printf("User %.*s password updated\n", (int)user_len, username);
-
-        ptr = (char *)message->res_buf;
-        // tag
-        *ptr++ = SYS_SUCCESS;
-        // version
-        *ptr++ = VERSION_NUM;
-        // sender_id
-        uint16_t sender_id = htons(SYSID);
+    ptr    = (char *)message->res_buf;
+    *ptr++ = SYS_SUCCESS;
+    *ptr++ = VERSION_NUM;
+    {
+        uint16_t sender_id = SYSID;
+        sender_id          = htons(sender_id);    // Removed redundant cast
         memcpy(ptr, &sender_id, sizeof(sender_id));
         ptr += sizeof(sender_id);
-        // payload len
-        message->response_len = 0;
-        message->response_len = htons(message->response_len);
-        memcpy(ptr, &message->response_len, sizeof(message->response_len));
-
-        dbm_close(userDB.db);
-        sfree(existing);
-        return 0;
-
-    error:
-        dbm_close(userDB.db);
-        sfree(existing);
-        return ACCOUNT_EDIT_ERROR;
     }
+    message->response_len = 0;
+    message->response_len = htons(message->response_len);
+    memcpy(ptr, &message->response_len, sizeof(message->response_len));
+
+    dbm_close(userDB.db);
+    sfree((void **)&existing);
+    return 0;
+
+error:
+    dbm_close(userDB.db);
+    sfree((void **)&existing);
+    return ACCOUNT_EDIT_ERROR;
 }
 
 static ssize_t account_logout(message_t *message)
 {
-    printf("User %d logged out\n", message->client_id);
-
+    printf("User %d logged out\n", *message->client_id);
     message->response_len = 0;
     return -1;
 }

@@ -3,6 +3,6 @@
 
 #include "../include/message.h"
 
-ssize_t account_handler(const message_t *message);
+ssize_t account_handler(message_t *message);
 
 #endif    // ACCOUNT_H
