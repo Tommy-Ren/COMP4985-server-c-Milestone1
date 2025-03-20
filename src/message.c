@@ -24,7 +24,7 @@ static ssize_t handle_package(message_t *message);
 static ssize_t handle_header(message_t *message, ssize_t nread);
 static ssize_t handle_payload(message_t *message, ssize_t nread);
 // static ssize_t     send_response(message_t *message);
-static void        send_sm_response(int sm_fd, char *msg);
+static void        send_sm_response(int sm_fd, const char *msg);
 static ssize_t     send_error_response(message_t *message);
 static const char *error_code_to_string(const error_code_t *code);
 static void        count_user(const int *client_id);
@@ -414,26 +414,33 @@ static void handle_sm_diagnostic(char *msg)
     memcpy(ptr, &net_msg_count, sizeof(net_msg_count));    // Use size of net_msg_count (typically 4 bytes).
 }
 
-static void send_sm_response(int sm_fd, char *msg)
+static void send_sm_response(int sm_fd, const char *msg)
 {
+    // Create a local copy of the message buffer.
+    char       local_msg[MESSAGE_LEN];
+    uint16_t   net_user_count;
+    uint32_t   net_msg_count;
     char      *ptr;
     int        fd;
     const char log[] = "./text.txt";
-    uint16_t   net_user_count;
-    uint32_t   net_msg_count;
 
-    ptr = msg;
+    memcpy(local_msg, msg, MESSAGE_LEN);
+    ptr = local_msg;
+    // Advance pointer past header.
     ptr += HEADERLEN;
+    // Convert user_count to network order (2 bytes).
     net_user_count = htons((uint16_t)user_count);
-    memcpy(ptr, &net_user_count, sizeof(user_count));
-    ptr += sizeof(user_count) + 1 + 1;
+    memcpy(ptr, &net_user_count, sizeof(net_user_count));    // Use size of net_user_count (2 bytes).
+    // Advance pointer by 2 bytes plus protocol padding (here +1+1 bytes).
+    ptr += sizeof(net_user_count) + 1 + 1;
 
+    // Convert message count to network order (4 bytes).
     net_msg_count = htonl((uint32_t)msg_count);
-    memcpy(ptr, &net_msg_count, sizeof(msg_count));
+    memcpy(ptr, &net_msg_count, sizeof(net_msg_count));    // Use size of net_msg_count (4 bytes).
 
     printf("send_user_count\n");
 
-    // testing
+    // Write to a log file.
     fd = open(log, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, S_IRUSR | S_IWUSR);
     if(fd == -1)
     {
@@ -441,13 +448,14 @@ static void send_sm_response(int sm_fd, char *msg)
     }
     else
     {
-        write(fd, msg, MESSAGE_LEN);
+        write(fd, local_msg, MESSAGE_LEN);
         close(fd);
     }
 
-    if(write(sm_fd, msg, MESSAGE_LEN) < 0)
+    // Send the constructed message to the server manager.
+    if(write(sm_fd, local_msg, MESSAGE_LEN) < 0)
     {
-        perror("Failed to send user count\n");
+        perror("Failed to send user count");
     }
 }
 
