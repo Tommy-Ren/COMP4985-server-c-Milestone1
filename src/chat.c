@@ -15,6 +15,7 @@ ssize_t chat_handler(message_t *message)
     uint8_t     content_len;
     uint8_t     user_len;
     char       *ptr;
+    const char *res_buf;
 
     uint16_t sender_id = SYSID;
 
@@ -37,7 +38,7 @@ ssize_t chat_handler(message_t *message)
     *ptr++ = CHT_SEND;
 
     message->response_len = (uint16_t)(HEADERLEN + ntohs(message->response_len));
-    printf("response_len: %d\n", (message->response_len));
+    printf("response_len: %d\n", (int)(message->response_len));
 
     // ACK
     write(message->client_fd, message->res_buf, message->response_len);
@@ -66,7 +67,8 @@ ssize_t chat_handler(message_t *message)
     printf("Timestamp: %.*s\n", (int)timestamp_len, timestamp);
     printf("Chat message: %.*s\n", (int)content_len, content);
     printf("Username: %.*s\n", (int)user_len, username);
-    printf("Response message: %.*s\n", (int)(message->response_len - HEADERLEN), message->res_buf + HEADERLEN);
+    res_buf = (const char *)message->res_buf;
+    printf("Response message: %.*s\n", (message->response_len - HEADERLEN), res_buf + HEADERLEN);
 
     for(int i = 1; i < MAX_FDS; i++)
     {

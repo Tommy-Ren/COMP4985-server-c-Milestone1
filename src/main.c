@@ -4,6 +4,7 @@
 #include "../include/utils.h"    // Declares setup_signal_handler() and server_running
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 int main(int argc, char *argv[])
@@ -41,16 +42,16 @@ int main(int argc, char *argv[])
     handle_connections(sockfd, sm_fd);
 
     // When a shutdown signal is received, handle_clients() returns.
-    if(sm_fd >= 0)
-    {
-        close(sm_fd);
-        sm_fd = -1;
-    }
-    if(sockfd >= 0)
-    {
-        close(sockfd);
-        sockfd = -1;
-    }
+    // if(sm_fd >= 0)
+    // {
+    //     close(sm_fd);
+    //     sm_fd = -1;
+    // }
+    // if(sockfd >= 0)
+    // {
+    //     close(sockfd);
+    //     sockfd = -1;
+    // }
 
     return EXIT_SUCCESS;
 }
