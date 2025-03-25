@@ -340,20 +340,34 @@ static ssize_t handle_payload(message_t *message, ssize_t nread)
         return ACCOUNT_ERROR;
     }
 
-    // If package type is account
-    retval = account_handler(message);
-    if(retval < 0)
+    switch(message->type)
     {
-        send_error_response(message);
-    }
+        case ACC_LOGIN:
+        case ACC_CREATE:
+        case ACC_EDIT:
+        case ACC_LOGOUT:
+            retval = account_handler(message);
+            if(retval < 0)
+            {
+                send_error_response(message);
+                return retval;
+            }
+            break;
 
-    // If package type if chat
-    retval = chat_handler(message);
-    if(retval < 0)
-    {
-        send_error_response(message);
+        case CHT_SEND:
+            retval = chat_handler(message);
+            if(retval < 0)
+            {
+                send_error_response(message);
+                return retval;
+            }
+            break;
+
+        default:
+            message->code = EC_INV_REQ;
+            send_error_response(message);
+            return ACCOUNT_ERROR;
     }
-    message->code = EC_INV_REQ;
 
     return 0;
 }
