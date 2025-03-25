@@ -43,16 +43,14 @@ static const error_code_map code_map[] = {
 void handle_connections(int server_fd, int sm_fd)
 {
     /* Use the global server_running variable declared in utils.h */
-    /* volatile sig_atomic_t server_running is already defined externally */
     struct pollfd fds[MAX_FDS];
     int           client_id[MAX_FDS];
     char          db_name[] = "meta_db";
     DBO           meta_db;
     int           poll_count;
-    // ssize_t       result;
-    message_t message;
-    char      sm_msg[MESSAGE_NUM];
-    int       i;
+    message_t     message;
+    char          sm_msg[MESSAGE_NUM];
+    int           i;
 
     // Initialize fds
     fds[0].fd     = server_fd;
@@ -63,7 +61,7 @@ void handle_connections(int server_fd, int sm_fd)
         client_id[i] = -1;
     }
 
-    // Initialize db
+    // Initialize meta database
     meta_db.name = db_name;
     if(init_pk(&meta_db, "USER_PK", &user_count) < 0)
     {
@@ -94,7 +92,7 @@ void handle_connections(int server_fd, int sm_fd)
             perror("poll error");
             goto exit;
         }
-        // Check for events on existing client connections
+        // On poll timeout, update user count and send diagnostics if connected to server manager.
         if(poll_count == 0)
         {
             printf("poll timeout\n");
@@ -104,7 +102,10 @@ void handle_connections(int server_fd, int sm_fd)
                 goto exit;
             }
             count_user(client_id);
-            send_sm_response(sm_fd, sm_msg);
+            if(sm_fd >= 0)    // Only send diagnostic update if connected to the server manager.
+            {
+                send_sm_response(sm_fd, sm_msg);
+            }
             continue;
         }
         // Check for new client connections
@@ -148,15 +149,13 @@ void handle_connections(int server_fd, int sm_fd)
             }
         }
 
-        // Handle incoming client connections
+        // Handle incoming data on existing client connections.
         for(i = 1; i < MAX_FDS; i++)
         {
-            // Skip empty file descriptors
             if(fds[i].fd == -1)
             {
                 continue;
             }
-            // Check for incoming data or errors on the client connection
             if(fds[i].revents & POLLIN)
             {
                 message.fds        = fds;
@@ -180,36 +179,36 @@ void handle_connections(int server_fd, int sm_fd)
     dbm_close(meta_db.db);
 
 exit:
-    /* Use the close_user_list() function to close the user database */
     store_int(meta_db.db, "USER_PK", user_index);
     dbm_close(meta_db.db);
 }
 
-ssize_t handle_request(int client_fd, message_t *message)
+static ssize_t handle_request(int client_fd, message_t *message)
 {
     ssize_t retval;
     message->client_fd    = client_fd;
     message->payload_len  = HEADERLEN;
     message->response_len = U8ENCODELEN;
-    message->req_buf      = malloc(HEADERLEN);
     message->code         = EC_GOOD;
 
-    /* Initialize pointers to NULL explicitly */
+    /* Allocate the request buffer */
     message->req_buf = malloc(HEADERLEN);
     if(!message->req_buf)
     {
-        perror("Failed to allocate message");
+        perror("Failed to allocate message request buffer");
         retval = -1;
         goto exit;
     }
 
-    memset(message->res_buf, 0, RESPONSELEN);
+    /* Allocate the response buffer */
+    message->res_buf = malloc(RESPONSELEN);
     if(!message->res_buf)
     {
-        perror("Failed to allocate response body");
+        perror("Failed to allocate message response buffer");
         retval = -1;
         goto exit;
     }
+    memset(message->res_buf, 0, RESPONSELEN);
 
     if(handle_package(message) < 0)
     {
@@ -219,10 +218,9 @@ ssize_t handle_request(int client_fd, message_t *message)
     }
 
     retval = EXIT_SUCCESS;
-
 exit:
-    sfree((void **)message->res_buf);
-    sfree((void **)message->res_buf);
+    sfree(&message->req_buf);
+    sfree(&message->res_buf);
     return retval;
 }
 
@@ -459,6 +457,62 @@ static void send_sm_response(int sm_fd, const char *msg)
     }
 }
 
+// static ssize_t send_error_response(message_t *message)
+// {
+//     char    *ptr;
+//     uint16_t sender_id;
+//     uint8_t  msg_len;
+
+//     sender_id = SYSID;
+//     ptr       = (char *)message->res_buf;
+
+//     // If not logout, send error response
+//     if(message->type != ACC_LOGOUT)
+//     {
+//         const char *msg;
+//         // tag
+//         *ptr++ = SYS_ERROR;
+//         // version
+//         *ptr++ = VERSION_NUM;
+//         // sender_id
+//         sender_id = htons(sender_id);
+//         memcpy(ptr, &sender_id, sizeof(sender_id));
+//         ptr += sizeof(sender_id);
+//         msg                   = error_code_to_string(&message->code);
+//         msg_len               = (uint8_t)strlen(msg);
+//         message->response_len = (uint16_t)(message->response_len + (sizeof(uint8_t) + sizeof(uint8_t) + msg_len));
+//         // payload len
+//         message->response_len = htons(message->response_len);
+//         memcpy(ptr, &message->response_len, sizeof(message->response_len));
+//         ptr += sizeof(message->response_len);
+//         // payload CHOICE
+//         *ptr++ = BER_INT;
+//         *ptr++ = sizeof(uint8_t);
+//         memcpy(ptr, &message->code, sizeof(uint8_t));
+//         ptr += sizeof(uint8_t);
+//         *ptr++ = BER_STR;
+//         memcpy(ptr, &msg_len, sizeof(msg_len));
+//         ptr += sizeof(msg_len);
+//         // response_len
+//         memcpy(ptr, msg, msg_len);
+//         message->response_len = (uint16_t)(HEADERLEN + ntohs(message->response_len));
+//     }
+
+//     if(write(message->client_fd, message->res_buf, message->response_len) < 0)
+//     {
+//         perror("Failed to send error response\n");
+//         sfree((void **)message->req_buf);
+//         close(message->client_fd);
+//         message->client_fd = -1;
+//         return -1;
+//     }
+
+//     printf("Response: %s\n", (char *)message->res_buf);
+//     sfree((void **)message->req_buf);
+//     close(message->client_fd);
+//     message->client_fd = -1;
+//     return 0;
+// }
 static ssize_t send_error_response(message_t *message)
 {
     char    *ptr;
@@ -468,26 +522,23 @@ static ssize_t send_error_response(message_t *message)
     sender_id = SYSID;
     ptr       = (char *)message->res_buf;
 
-    // If not logout, send error response
     if(message->type != ACC_LOGOUT)
     {
         const char *msg;
-        // tag
-        *ptr++ = SYS_ERROR;
-        // version
-        *ptr++ = VERSION_NUM;
-        // sender_id
+        // Build error response header.
+        *ptr++    = SYS_ERROR;
+        *ptr++    = VERSION_NUM;
         sender_id = htons(sender_id);
         memcpy(ptr, &sender_id, sizeof(sender_id));
         ptr += sizeof(sender_id);
-        msg                   = error_code_to_string(&message->code);
-        msg_len               = (uint8_t)strlen(msg);
+        msg     = error_code_to_string(&message->code);
+        msg_len = (uint8_t)strlen(msg);
+        // Update response_len to include tag fields and message.
         message->response_len = (uint16_t)(message->response_len + (sizeof(uint8_t) + sizeof(uint8_t) + msg_len));
-        // payload len
         message->response_len = htons(message->response_len);
         memcpy(ptr, &message->response_len, sizeof(message->response_len));
         ptr += sizeof(message->response_len);
-        // payload CHOICE
+        // Encode error code and error string.
         *ptr++ = BER_INT;
         *ptr++ = sizeof(uint8_t);
         memcpy(ptr, &message->code, sizeof(uint8_t));
@@ -495,22 +546,20 @@ static ssize_t send_error_response(message_t *message)
         *ptr++ = BER_STR;
         memcpy(ptr, &msg_len, sizeof(msg_len));
         ptr += sizeof(msg_len);
-        // response_len
         memcpy(ptr, msg, msg_len);
+        // Calculate the final response length.
         message->response_len = (uint16_t)(HEADERLEN + ntohs(message->response_len));
     }
 
     if(write(message->client_fd, message->res_buf, message->response_len) < 0)
     {
-        perror("Failed to send error response\n");
-        sfree((void **)message->req_buf);
+        perror("Failed to send error response");
         close(message->client_fd);
         message->client_fd = -1;
         return -1;
     }
 
     printf("Response: %s\n", (char *)message->res_buf);
-    sfree((void **)message->req_buf);
     close(message->client_fd);
     message->client_fd = -1;
     return 0;

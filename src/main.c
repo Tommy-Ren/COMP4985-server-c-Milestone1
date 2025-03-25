@@ -11,7 +11,7 @@ int main(int argc, char *argv[])
 {
     Arguments args;
     int       sockfd;
-    int       sm_fd;    // No initial assignment needed
+    int       sm_fd;    // Server manager socket descriptor
 
     memset(&args, 0, sizeof(Arguments));
     args.ip   = NULL;
@@ -36,22 +36,11 @@ int main(int argc, char *argv[])
     if(sm_fd < 0)
     {
         fprintf(stderr, "Failed to connect to server manager, continuing without it.\n");
+        sm_fd = -1;    // Mark sm_fd as invalid so that diagnostics won't be sent.
     }
 
-    // handle_connections() handle server manager and clients
+    // handle_connections() handles both server manager and client connections
     handle_connections(sockfd, sm_fd);
-
-    // When a shutdown signal is received, handle_clients() returns.
-    // if(sm_fd >= 0)
-    // {
-    //     close(sm_fd);
-    //     sm_fd = -1;
-    // }
-    // if(sockfd >= 0)
-    // {
-    //     close(sockfd);
-    //     sockfd = -1;
-    // }
 
     return EXIT_SUCCESS;
 }

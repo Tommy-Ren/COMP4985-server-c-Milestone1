@@ -7,8 +7,8 @@
 #define OPTION_MESSAGE_LEN 50
 #define IP_ADDRESS "127.0.0.1"
 #define SERVER_MANAGER_IP "192.168.122.1"
-#define PORT "8080"
-#define SERVER_MANAGER_PORT "8081"
+#define PORT "8000"
+#define SERVER_MANAGER_PORT "9000"
 
 /* Initialize the socket and bind it to the specified port */
 _Noreturn void usage(const char *app_name, int exit_code, const char *message)
