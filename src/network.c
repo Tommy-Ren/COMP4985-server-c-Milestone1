@@ -16,7 +16,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const Arguments *args);
+static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const char *ip, in_port_t port);
 static int  socket_create(int domain, int type, int protocol);
 static int  socket_set(int sockfd);
 /* Declare the parameters as pointers to const */
@@ -127,7 +127,7 @@ int server_manager_tcp(const Arguments *args)
 }
 
 /* Set up address structure */
-static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const char *ip, const in_port_t port)
+static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const char *ip, in_port_t port)
 {
     in_port_t net_port;
     net_port = htons(port);
