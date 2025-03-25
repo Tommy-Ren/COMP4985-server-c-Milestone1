@@ -7,6 +7,9 @@
 #include <string.h>
 #include <unistd.h>
 
+#define SM_MAX_ATTEMPTS 5    // Maximum number of connection attempts to server manager
+#define SM_RETRY_DELAY 1     // Delay in seconds between attempts
+
 int main(int argc, char *argv[])
 {
     Arguments args;
@@ -31,15 +34,29 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    printf("Connecting to server manager on %s:%d\n", args.sm_ip, args.sm_port);
-    sm_fd = server_manager_tcp(&args);
+    // Try to connect to the server manager up to SM_MAX_ATTEMPTS times.
+    sm_fd = -1;
+    for(int attempt = 0; attempt < SM_MAX_ATTEMPTS; attempt++)
+    {
+        printf("Connecting to server manager on %s:%d (attempt %d)...\n", args.sm_ip, args.sm_port, attempt + 1);
+        sm_fd = server_manager_tcp(&args);
+        if(sm_fd >= 0)
+        {
+            break;
+        }
+        fprintf(stderr, "Attempt %d: Failed to connect to server manager, retrying in %d second(s)...\n", attempt + 1, SM_RETRY_DELAY);
+        sleep(SM_RETRY_DELAY);
+    }
     if(sm_fd < 0)
     {
-        fprintf(stderr, "Failed to connect to server manager, continuing without it.\n");
-        sm_fd = -1;    // Mark sm_fd as invalid so that diagnostics won't be sent.
+        fprintf(stderr, "Failed to connect to server manager after %d attempts, continuing without it.\n", SM_MAX_ATTEMPTS);
+    }
+    else
+    {
+        printf("Connected to server manager.\n");
     }
 
-    // handle_connections() handles both server manager and client connections
+    // Start handling client connections (and optionally sending diagnostics to the server manager)
     handle_connections(sockfd, sm_fd);
 
     return EXIT_SUCCESS;
