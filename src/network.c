@@ -46,7 +46,7 @@ int server_tcp(const Arguments *args)
     memset(&addr, 0, sizeof(struct sockaddr_storage));
 
     /* Set up the address structure */
-    socket_setup(&addr, &addr_len, args);
+    socket_setup(&addr, &addr_len, args->ip, args->port);
 
     /* Create the socket */
     sockfd = socket_create(addr.ss_family, SOCK_STREAM, 0);
@@ -98,7 +98,7 @@ int server_manager_tcp(const Arguments *args)
     memset(&addr, 0, sizeof(struct sockaddr_storage));
 
     /* Set up the address structure */
-    socket_setup(&addr, &addr_len, args);
+    socket_setup(&addr, &addr_len, args->sm_ip, args->sm_port);
 
     /* Create the socket */
     sm_fd = socket_create(addr.ss_family, SOCK_STREAM, 0);
@@ -127,14 +127,14 @@ int server_manager_tcp(const Arguments *args)
 }
 
 /* Set up address structure */
-static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const Arguments *args)
+static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, const char *ip, const in_port_t port)
 {
     in_port_t net_port;
-    net_port = htons(args->port);
+    net_port = htons(port);
     memset(addr, 0, sizeof(struct sockaddr_storage));
 
     /* Try to interpret the address as IPv4 */
-    if(inet_pton(AF_INET, args->ip, &((struct sockaddr_in *)addr)->sin_addr) == 1)
+    if(inet_pton(AF_INET, ip, &((struct sockaddr_in *)addr)->sin_addr) == 1)
     {
         struct sockaddr_in *ipv4_addr = (struct sockaddr_in *)addr;
         ipv4_addr->sin_family         = AF_INET;
@@ -142,7 +142,7 @@ static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, con
         *addr_len                     = sizeof(struct sockaddr_in);
     }
     /* If IPv4 fails, try interpreting it as IPv6 */
-    else if(inet_pton(AF_INET6, args->ip, &((struct sockaddr_in6 *)addr)->sin6_addr) == 1)
+    else if(inet_pton(AF_INET6, ip, &((struct sockaddr_in6 *)addr)->sin6_addr) == 1)
     {
         struct sockaddr_in6 *ipv6_addr = (struct sockaddr_in6 *)addr;
         ipv6_addr->sin6_family         = AF_INET6;
@@ -151,7 +151,7 @@ static void socket_setup(struct sockaddr_storage *addr, socklen_t *addr_len, con
     }
     else
     {
-        fprintf(stderr, "%s is not a valid IPv4 or IPv6 address\n", args->ip);
+        fprintf(stderr, "%s is not a valid IPv4 or IPv6 address\n", ip);
         exit(EXIT_FAILURE);
     }
 }
