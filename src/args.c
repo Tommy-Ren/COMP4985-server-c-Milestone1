@@ -5,7 +5,7 @@
 #include <stdlib.h>
 
 #define OPTION_MESSAGE_LEN 50
-#define IP_ADDRESS "192.168.122.1"
+#define IP_ADDRESS "127.0.0.1"
 #define SERVER_MANAGER_IP "192.168.0.66"
 #define PORT "8000"
 #define SERVER_MANAGER_PORT "9000"

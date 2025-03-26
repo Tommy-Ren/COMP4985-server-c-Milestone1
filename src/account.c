@@ -98,8 +98,8 @@ static ssize_t account_create(message_t *message)
         goto error;
     }
 
-    (*message->user_count)++;
-    *message->client_id = *message->user_count;
+    user_index++;
+    message->client_id = user_index;
 
     // Store user.
     if(store_byte(userDB.db, username, user_len, password, pass_len) != 0)

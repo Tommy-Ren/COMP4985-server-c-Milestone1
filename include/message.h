@@ -11,7 +11,7 @@
 #define VERSION_NUM (3)    // Updated to Protocol Version 3
 
 #define MAX_FDS (5)
-#define TIMEOUT (3000)
+#define TIMEOUT (5000)
 
 #define HEADERLEN (6)
 #define U8ENCODELEN (3)
@@ -20,13 +20,17 @@
 #define MESSAGE_LEN (14)
 #define DIAGNOSTIC_PAYLOAD_LEN 0x000A
 
-#define ACCOUNT_ERROR (-1)
-#define ACCOUNT_LOGIN_ERROR (-2)
-#define ACCOUNT_CREATE_ERROR (-3)
-#define ACCOUNT_EDIT_ERROR (-4)
-#define CHAT_ERROR (-5)
+#define ACCOUNT_ERROR (1)
+#define ACCOUNT_LOGIN_ERROR (2)
+#define ACCOUNT_CREATE_ERROR (3)
+#define ACCOUNT_EDIT_ERROR (4)
+#define CHAT_ERROR (5)
 
 #define UNKNOWNTYPE "Unknown Type"
+
+extern uint16_t user_count;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
+extern uint32_t msg_count;     // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
+extern int      user_index;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
 
 typedef enum
 {
@@ -103,11 +107,10 @@ typedef struct message_t
     uint16_t response_len;    // Response length
 
     // Shared
-    error_code_t   code;          // Error code
-    int            client_fd;     // Client file descriptor
-    int           *client_id;     // Client ID
-    int           *user_count;    // User count
-    struct pollfd *fds;           // Poll file descriptor
+    error_code_t   code;         // Error code
+    int            client_fd;    // Client file descriptor
+    int           *client_id;    // Client ID
+    struct pollfd *fds;          // Poll file descriptor
 } message_t;
 
 typedef struct
