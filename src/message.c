@@ -342,19 +342,24 @@ static ssize_t handle_payload(message_t *message, ssize_t nread)
 
     switch(message->type)
     {
+            // For account login, create, and edit errors, send error response but do NOT force connection closure.
         case ACC_LOGIN:
         case ACC_CREATE:
         case ACC_EDIT:
+            retval = account_handler(message);
+            if(retval < 0)
+            {
+                send_error_response(message);
+                return 0;    // Return success so that the connection remains open.
+            }
+            break;
+
+        // For logout (and other types) we still close the connection.
         case ACC_LOGOUT:
             retval = account_handler(message);
             if(retval < 0)
             {
                 send_error_response(message);
-                // For login failure, do not treat it as fatal so that the connection remains open.
-                if(message->type == ACC_LOGIN)
-                {
-                    return 0;
-                }
                 return retval;
             }
             break;
@@ -579,7 +584,7 @@ static ssize_t send_error_response(message_t *message)
     }
 
     printf("Response: %s\n", (char *)message->res_buf);
-    if(message->type != ACC_LOGIN)
+    if(message->type != ACC_LOGIN && message->type != ACC_CREATE && message->type != ACC_EDIT)
     {
         close(message->client_fd);
         message->client_fd = -1;
