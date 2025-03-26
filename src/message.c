@@ -350,6 +350,11 @@ static ssize_t handle_payload(message_t *message, ssize_t nread)
             if(retval < 0)
             {
                 send_error_response(message);
+                // For login failure, do not treat it as fatal so that the connection remains open.
+                if(message->type == ACC_LOGIN)
+                {
+                    return 0;
+                }
                 return retval;
             }
             break;
@@ -574,8 +579,11 @@ static ssize_t send_error_response(message_t *message)
     }
 
     printf("Response: %s\n", (char *)message->res_buf);
-    close(message->client_fd);
-    message->client_fd = -1;
+    if(message->type != ACC_LOGIN)
+    {
+        close(message->client_fd);
+        message->client_fd = -1;
+    }
     return 0;
 }
 
