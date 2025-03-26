@@ -202,8 +202,6 @@ static ssize_t handle_message(message_t *message)
 {
     ssize_t retval;
 
-    retval = EXIT_SUCCESS;
-
     /* Allocate the message buffer */
     message->req_buf = malloc(HEADERLEN);
     if(!message->req_buf)
@@ -300,7 +298,7 @@ static ssize_t handle_package(message_t *message)
     }
     if(retval == END)
     {
-        perror("No Error, Log out.\n");
+        perror("End, closing client fd.\n");
         return END;
     }
 
