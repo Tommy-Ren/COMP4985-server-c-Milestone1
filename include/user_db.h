@@ -63,6 +63,6 @@ int retrieve_int(DBM *db, const char *key, int *result);
 void *retrieve_byte(DBM *db, const void *key, size_t size);
 
 /* Initializes the primary key in the database. Returns 0 on success, -1 on failure. */
-ssize_t init_pk(DBO *dbo, const char *pk_name, int *pk);
+ssize_t init_pk(DBO *dbo, const char *pk_name);
 
 #endif    // DATABASE_H

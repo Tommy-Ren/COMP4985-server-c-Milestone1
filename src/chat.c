@@ -41,7 +41,7 @@ ssize_t chat_handler(message_t *message)
     printf("response_len: %d\n", (int)(message->response_len));
 
     // ACK
-    write(message->client_fd, message->res_buf, message->response_len);
+    write(message->client->fd, message->res_buf, message->response_len);
     // Timestamp
     ptr = (char *)message->req_buf + HEADERLEN + 1;
     memcpy(&timestamp_len, ptr, sizeof(timestamp_len));

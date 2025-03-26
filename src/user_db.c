@@ -8,6 +8,7 @@
  ******************************************************************************/
 
 #include "../include/user_db.h"
+#include "../include/message.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -145,25 +146,23 @@ void *retrieve_byte(DBM *db, const void *key, size_t size)
     return retrieved_str;
 }
 
-ssize_t init_pk(DBO *dbo, const char *pk_name, int *pk)
+ssize_t init_pk(DBO *dbo, const char *pk_name)
 {
     if(database_open(dbo) < 0)
     {
-        perror("init_pk database_open failed");
+        perror("database error");
         return -1;
     }
 
-    if(retrieve_int(dbo->db, pk_name, pk) < 0)
+    if(retrieve_int(dbo->db, pk_name, &user_index) < 0)
     {
-        // *pk = 0;
-        *pk = 2;
-        if(store_int(dbo->db, pk_name, *pk) != 0)
+        if(store_int(dbo->db, pk_name, user_index) != 0)
         {
             return -1;
         }
     }
 
-    printf("Retrieved user_count: %d\n", *pk);
+    printf("Retrieved user_count: %d\n", user_index);
 
     dbm_close(dbo->db);
     return 0;

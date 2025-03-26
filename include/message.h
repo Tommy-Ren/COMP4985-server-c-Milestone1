@@ -11,6 +11,7 @@
 #define VERSION_NUM (3)    // Updated to Protocol Version 3
 
 #define MAX_FDS (5)
+#define MAX_MSG (100)
 #define TIMEOUT (5000)
 
 #define HEADERLEN (6)
@@ -20,11 +21,12 @@
 #define MESSAGE_LEN (14)
 #define DIAGNOSTIC_PAYLOAD_LEN 0x000A
 
-#define ACCOUNT_ERROR (1)
-#define ACCOUNT_LOGIN_ERROR (2)
-#define ACCOUNT_CREATE_ERROR (3)
-#define ACCOUNT_EDIT_ERROR (4)
-#define CHAT_ERROR (5)
+#define ACCOUNT_ERROR (-1)
+#define ACCOUNT_LOGIN_ERROR (-2)
+#define ACCOUNT_CREATE_ERROR (-3)
+#define ACCOUNT_EDIT_ERROR (-4)
+#define CHAT_ERROR (-5)
+#define END (-6)
 
 #define UNKNOWNTYPE "Unknown Type"
 
@@ -108,7 +110,7 @@ typedef struct message_t
 
     // Shared
     error_code_t   code;         // Error code
-    int            client_fd;    // Client file descriptor
+    struct pollfd *client;       // Client fd
     int           *client_id;    // Client ID
     struct pollfd *fds;          // Poll file descriptor
 } message_t;

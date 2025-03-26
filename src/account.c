@@ -99,7 +99,7 @@ static ssize_t account_create(message_t *message)
     }
 
     user_index++;
-    message->client_id = user_index;
+    *message->client_id = user_index;
 
     // Store user.
     if(store_byte(userDB.db, username, user_len, password, pass_len) != 0)
@@ -366,5 +366,5 @@ static ssize_t account_logout(message_t *message)
 {
     printf("User %d logged out\n", *message->client_id);
     message->response_len = 0;
-    return -1;
+    return END;
 }

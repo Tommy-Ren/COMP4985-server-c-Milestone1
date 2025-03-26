@@ -13,16 +13,17 @@
 #include <string.h>
 #include <unistd.h>
 
-uint16_t user_count = 0;      // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
-uint32_t msg_count  = 100;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
-int      user_index = 0;      // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
+uint16_t user_count = 0;          // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
+uint32_t msg_count  = MAX_MSG;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
+int      user_index = 0;          // NOLINT(cppcoreguidelines-avoid-non-const-global-variables,-warnings-as-errors)
 
 static void handle_sm_diagnostic(char *msg);
 /* Declaration for static functions */
-static ssize_t handle_request(int client_fd, message_t *message);
+static ssize_t handle_message(message_t *message);
 static ssize_t handle_package(message_t *message);
 static ssize_t handle_header(message_t *message, ssize_t nread);
 static ssize_t handle_payload(message_t *message, ssize_t nread);
+static ssize_t handle_response(message_t *message);
 // static ssize_t     send_response(message_t *message);
 static void        send_sm_response(int sm_fd, const char *msg);
 static ssize_t     send_error_response(message_t *message);
@@ -51,7 +52,7 @@ void handle_connections(int server_fd, int sm_fd)
     message_t     message;
     char          sm_msg[MESSAGE_NUM];
     int           i;
-    int           retval;
+    ssize_t       retval;
 
     // Initialize fds
     retval        = 1;
@@ -65,7 +66,7 @@ void handle_connections(int server_fd, int sm_fd)
 
     // Initialize meta database
     meta_db.name = db_name;
-    if(init_pk(&meta_db, "USER_PK", &user_count) < 0)
+    if(init_pk(&meta_db, "USER_PK") < 0)
     {
         perror("Failed to initialize meta_db\n");
         goto exit;
@@ -159,23 +160,21 @@ void handle_connections(int server_fd, int sm_fd)
                 if(fds[i].revents & POLLIN)
                 {
                     message.fds          = fds;
-                    message.client_fd    = &fds[i];
+                    message.client       = &fds[i];
                     message.client_id    = &client_id[i];
-                    message.req_buf      = malloc(HEADERLEN);
                     message.payload_len  = HEADERLEN;
-                    message.res_buf      = malloc(RESPONSELEN);
                     message.response_len = 3;
                     message.code         = EC_GOOD;
 
-                    while(retval >= 0)
+                    while(retval != END)
                     {
-                        retval = handle_request(fds[i].fd, &message);
+                        retval = handle_message(&message);
                     }
                     goto exit;
                 }
                 if(fds[i].revents & (POLLHUP | POLLERR))
                 {
-                    printf("client#%d disconnected.\n", &client_id[i]);
+                    printf("client#%d disconnected.\n", client_id[i]);
                     close(fds[i].fd);
                     fds[i].fd     = -1;
                     fds[i].events = 0;
@@ -199,19 +198,17 @@ exit:
     dbm_close(meta_db.db);
 }
 
-static ssize_t handle_request(int client_fd, message_t *message)
+static ssize_t handle_message(message_t *message)
 {
     ssize_t retval;
-    message->client_fd    = client_fd;
-    message->payload_len  = HEADERLEN;
-    message->response_len = U8ENCODELEN;
-    message->code         = EC_GOOD;
 
-    /* Allocate the request buffer */
+    retval = EXIT_SUCCESS;
+
+    /* Allocate the message buffer */
     message->req_buf = malloc(HEADERLEN);
     if(!message->req_buf)
     {
-        perror("Failed to allocate message request buffer");
+        perror("Failed to allocate message message buffer");
         retval = -1;
         goto exit;
     }
@@ -226,14 +223,8 @@ static ssize_t handle_request(int client_fd, message_t *message)
     }
     memset(message->res_buf, 0, RESPONSELEN);
 
-    if(handle_package(message) < 0)
-    {
-        perror("Failed to handle packet");
-        retval = -3;
-        goto exit;
-    }
+    retval = handle_package(message);
 
-    retval = EXIT_SUCCESS;
 exit:
     sfree(&message->req_buf);
     sfree(&message->res_buf);
@@ -247,7 +238,7 @@ static ssize_t handle_package(message_t *message)
     ssize_t nread;
     void   *tmp;
 
-    nread = read(message->client_fd, (char *)message->req_buf, message->payload_len);
+    nread = read(message->client->fd, (char *)message->req_buf, message->payload_len);
     if(nread < 0)
     {
         perror("Fail to read header");
@@ -273,7 +264,7 @@ static ssize_t handle_package(message_t *message)
     message->req_buf = tmp;
 
     // Read payload_length into buffer
-    nread = read(message->client_fd, ((char *)message->req_buf) + HEADERLEN, message->payload_len);
+    nread = read(message->client->fd, ((char *)message->req_buf) + HEADERLEN, message->payload_len);
     if(nread < 0)
     {
         perror("Failed to read message body\n");
@@ -306,6 +297,11 @@ static ssize_t handle_package(message_t *message)
     {
         perror("Chat error\n");
         return CHAT_ERROR;
+    }
+    if(retval == END)
+    {
+        perror("No Error, Log out.\n");
+        return END;
     }
 
     return 0;
@@ -385,6 +381,20 @@ static ssize_t handle_payload(message_t *message, ssize_t nread)
             return ACCOUNT_ERROR;
     }
 
+    // If no error, return 0 always
+    return handle_response(message);
+}
+
+static ssize_t handle_response(message_t *message)
+{
+    if(message->type != CHT_SEND)
+    {
+        message->response_len = (uint16_t)(HEADERLEN + ntohs(message->response_len));
+        printf("response_len: %d\n", (message->response_len));
+        write(message->client->fd, message->res_buf, message->response_len);
+    }
+
+    sfree(&message->req_buf);
     return 0;
 }
 
@@ -416,13 +426,13 @@ static void handle_sm_diagnostic(char *msg)
 
     *ptr++         = BER_INT;
     *ptr++         = sizeof(user_count);    // This is the length field in the protocol (size in bytes).
-    net_user_count = htons((uint16_t)user_count);
+    net_user_count = htons(user_count);
     memcpy(ptr, &net_user_count, sizeof(net_user_count));    // Use size of net_user_count (2 bytes).
     ptr += sizeof(net_user_count);
 
     *ptr++        = BER_INT;
     *ptr++        = sizeof(msg_count);    // Length field as per protocol.
-    net_msg_count = htonl((uint32_t)msg_count);
+    net_msg_count = htonl(msg_count);
     memcpy(ptr, &net_msg_count, sizeof(net_msg_count));    // Use size of net_msg_count (typically 4 bytes).
 }
 
@@ -441,13 +451,13 @@ static void send_sm_response(int sm_fd, const char *msg)
     // Advance pointer past header.
     ptr += HEADERLEN;
     // Convert user_count to network order (2 bytes).
-    net_user_count = htons((uint16_t)user_count);
+    net_user_count = htons(user_count);
     memcpy(ptr, &net_user_count, sizeof(net_user_count));    // Use size of net_user_count (2 bytes).
     // Advance pointer by 2 bytes plus protocol padding (here +1+1 bytes).
     ptr += sizeof(net_user_count) + 1 + 1;
 
     // Convert message count to network order (4 bytes).
-    net_msg_count = htonl((uint32_t)msg_count);
+    net_msg_count = htonl(msg_count);
     memcpy(ptr, &net_msg_count, sizeof(net_msg_count));    // Use size of net_msg_count (4 bytes).
 
     printf("send_user_count\n");
@@ -509,17 +519,23 @@ static ssize_t send_error_response(message_t *message)
         message->response_len = (uint16_t)(HEADERLEN + ntohs(message->response_len));
     }
 
-    if(write(message->client_fd, message->res_buf, message->response_len) < 0)
+    if(write(message->client->fd, message->res_buf, message->response_len) < 0)
     {
         perror("Failed to send error response");
-        close(message->client_fd);
-        message->client_fd = -1;
+        sfree(&message->req_buf);
+        close(message->client->fd);
+        message->client->fd     = -1;
+        message->client->events = 0;
+        *message->client_id     = -1;
         return -1;
     }
 
     printf("Response: %s\n", (char *)message->res_buf);
-    close(message->client_fd);
-    message->client_fd = -1;
+    sfree(&message->req_buf);
+    close(message->client->fd);
+    message->client->fd     = -1;
+    message->client->events = 0;
+    *message->client_id     = -1;
     return 0;
 }
 
