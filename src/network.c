@@ -30,6 +30,7 @@ static int socket_connect(int sockfd, const struct sockaddr_storage *addr, sockl
 #define ERR_BIND (-3)
 #define ERR_LISTEN (-4)
 #define ERR_CONNECT (-5)
+#define CONNECT_TIMEOUT 5000
 
 /*
  * Function: server_tcp
@@ -214,12 +215,48 @@ static int socket_listen(int server_fd, int backlog)
 /* Connect the socket.
    Note: We cast away the const qualifier because connect() requires a non-const pointer.
    We know that connect() does not modify the underlying address structure. */
+
 static int socket_connect(int sockfd, const struct sockaddr_storage *addr, socklen_t addr_len)
 {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wcast-qual"
-    int ret = connect(sockfd, (struct sockaddr *)addr, addr_len);
-#pragma GCC diagnostic pop
+    int                     ret;
+    struct sockaddr_storage local_addr;
+    memcpy(&local_addr, addr, addr_len);
+    ret = connect(sockfd, (struct sockaddr *)&local_addr, addr_len);
+    if(ret < 0)
+    {
+        if(errno == EINPROGRESS)
+        {
+            struct pollfd pfd;
+            int           poll_ret;    // Declare poll_ret at the beginning of the block
+            pfd.fd     = sockfd;
+            pfd.events = POLLOUT;
+            poll_ret   = poll(&pfd, 1, CONNECT_TIMEOUT);
+            if(poll_ret > 0)
+            {
+                int       err = 0;
+                socklen_t len = sizeof(err);
+                if(getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &err, &len) < 0)
+                {
+                    return -1;
+                }
+                if(err != 0)
+                {
+                    errno = err;
+                    return -1;
+                }
+                // Connection completed successfully
+                return 0;
+            }
+            if(poll_ret == 0)
+            {
+                // Poll timed out
+                errno = ETIMEDOUT;
+                return -1;
+            }
+        }
+        // For errors other than EINPROGRESS, return failure
+        return -1;
+    }
     return ret;
 }
 
