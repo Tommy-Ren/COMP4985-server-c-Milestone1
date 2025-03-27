@@ -178,12 +178,14 @@ static int socket_set(int sockfd)
         return -1;
     }
 
-    flag |= O_NONBLOCK;
-    if(fcntl(sockfd, F_SETFL, flag) == -1)
-    {
-        perror("Failed to set flag");
-        return -1;
-    }
+    // === NEW!!! NON-BLOCKING FLAG CAUSES ISSUES WITH THE SERVER STARTER SOCKET SET UP ===
+
+    //    flag |= O_NONBLOCK;
+    //    if(fcntl(sockfd, F_SETFL, flag) == -1)
+    //    {
+    //        perror("Failed to set flag");
+    //        return -1;
+    //    }
 
     if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0)
     {
